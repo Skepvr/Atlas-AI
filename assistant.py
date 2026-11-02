@@ -8,7 +8,7 @@ Then:  it opens http://localhost:8765 in your browser.
 Needs only Python 3 (no installs). Ollama must be running with at least one model.
 Your chats are saved next to this file in assistant_data.json and never leave your computer.
 """
-import hmac, json, mimetypes, os, re, secrets, shlex, shutil, socket, subprocess, sys, time, threading, webbrowser, urllib.request, urllib.error, urllib.parse
+import base64, hmac, json, mimetypes, os, re, secrets, shlex, shutil, socket, struct, subprocess, sys, time, threading, webbrowser, urllib.request, urllib.error, urllib.parse
 from html.parser import HTMLParser
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -23,6 +23,7 @@ else:
 DATA = os.path.join(BASE, "assistant_data.json")
 PING = {"t": time.time(), "seen": False}
 CAPS = {}
+ICONDIR = os.path.join(os.path.expanduser("~"), ".my-assistant", "icon")
 
 
 def say(*a):
@@ -136,10 +137,11 @@ def undo_moves():
         elif d.exists() and not a.exists():
             shutil.move(str(d), str(a))
             n += 1
-        try:
-            d.parent.rmdir()
-        except OSError:
-            pass
+        if m.get("made", True):
+            try:
+                d.parent.rmdir()
+            except OSError:
+                pass
     os.remove(UNDO)
     return n
 
@@ -161,7 +163,59 @@ def list_videos(folder, deep=False):
                 x = Path(root) / n
                 st = x.stat()
                 items.append((st.st_mtime, {"name": n, "path": str(x), "mb": round(st.st_size / 1048576)}))
-    return {"videos": [v for _, v in sorted(items, key=lambda t: -t[0])][:400]}
+    dirs = []
+    for d in sorted(f.iterdir(), key=lambda x: x.name.lower()):
+        if d.is_dir() and not d.name.startswith("."):
+            try:
+                cnt = sum(1 for x in d.iterdir() if x.suffix.lower() in MEDIA)
+            except OSError:
+                cnt = 0
+            dirs.append({"name": d.name, "path": str(d), "count": cnt})
+    try:  # a way back up, as long as that folder is one we are allowed to use
+        safe_folder(str(f.parent))
+        parent = str(f.parent)
+    except ValueError:
+        parent = ""
+    return {"videos": [v for _, v in sorted(items, key=lambda t: -t[0])][:400], "folders": dirs, "parent": parent}
+
+
+def folder_name(n):
+    n = clean_name(n or "")[:80].strip(". ")
+    if not n or n.upper().split(".")[0] in {"CON", "PRN", "AUX", "NUL"} | {"COM%d" % i for i in range(1, 10)} | {"LPT%d" % i for i in range(1, 10)}:
+        raise ValueError("Type a folder name first (letters and numbers work best).")
+    return n
+
+
+def folder_op(j):
+    f = safe_folder(j["folder"])
+    act = j.get("action")
+    if act == "create":
+        n = folder_name(j.get("name"))
+        t = f / n
+        if t.exists():
+            raise ValueError('A folder named "%s" already exists here. Pick it from the list instead.' % n)
+        t.mkdir()
+        return {"name": n, "path": str(t)}
+    t = (f / os.path.basename(str(j.get("name", "")))).resolve()
+    if t.parent != f or not t.is_dir():
+        raise ValueError("That folder isn't there any more.")
+    if act == "rename":
+        n = folder_name(j.get("new"))
+        u = f / n
+        if u.exists():
+            raise ValueError('A folder named "%s" already exists here.' % n)
+        t.rename(u)
+        return {"name": n, "path": str(u)}
+    if act == "delete":
+        try:
+            t.rmdir()  # only works when it is empty
+        except OSError:
+            raise ValueError("That folder isn't empty, so I left it alone. Move or delete what's inside first.")
+        return {"ok": True}
+    raise ValueError("Unknown folder action.")
+
+
+
 
 
 def dest_dir(dest):
@@ -224,6 +278,7 @@ def convert_file(path, fmt, dest=""):
 
 def send_files(files, dest, mode="link"):
     d = dest_dir(dest)
+    made = not d.exists()
     d.mkdir(exist_ok=True)
     done = []
     for x in files:
@@ -243,7 +298,7 @@ def send_files(files, dest, mode="link"):
             shutil.copy2(a, n)
         else:
             shutil.move(str(a), str(n))
-        done.append({"src": str(a), "dst": str(n), "mode": mode})
+        done.append({"src": str(a), "dst": str(n), "mode": mode, "made": made})
     with open(UNDO, "w") as fh:
         json.dump(done, fh)
     return {"n": len(done), "dest": str(d)}
@@ -424,10 +479,15 @@ def fetch_url(url):
 PAGE = r'''<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<script>try{document.documentElement.dataset.theme=localStorage.getItem("atlasTheme")||""}catch(e){}</script>
 <title>Atlas</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' fill='%238aa0ff'/><circle cx='32' cy='32' r='12' fill='%230d1230'/></svg>">
+<!--icon--><link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1024 1024'><rect width='1024' height='1024' rx='229' fill='%23141517'/><g transform='translate(512 512) scale(1.05) translate(-490 -490)' fill='none' stroke='%238aa0ff' stroke-width='36' stroke-linecap='round' stroke-linejoin='round'><path d='M490 232C400 232 312 320 312 450C312 570 340 700 490 700C640 700 668 570 668 450C668 320 580 232 490 232Z'/><path d='M312 448C262 462 250 568 322 592M668 448C718 462 730 568 658 592'/><path d='M410 690L388 750M573 690L592 750'/><path d='M380 432Q415 490 450 432M532 432Q567 490 602 432'/><path d='M452 578Q490 598 528 578'/><path d='M240 268L283 300M743 268L700 300M212 396H250M732 396H768'/></g></svg>">
+<link rel="icon" type="image/png" sizes="128x128" href="data:image/png;base64,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"><!--/icon-->
 <style>
-:root{color-scheme:dark;--bg:#121314;--panel:#1a1b1d;--ink:#e7e7e4;--mute:#8d9095;--line:#2b2d30;--accent:#8aa0ff;--onaccent:#0d1230;--me:#242a4a;--code:#0b0c0d}
+:root{color-scheme:dark;--bg:#121314;--panel:#1a1b1d;--ink:#e7e7e4;--mute:#8d9095;--line:#2b2d30;--accent:#8aa0ff;--onaccent:#0d1230;--me:#242a4a;--code:#0b0c0d;--err:#ff9b93}
+:root[data-theme=light]{color-scheme:light;--bg:#f5f6f3;--panel:#e9ebe6;--ink:#1d2321;--mute:#626b68;--line:#d3d8d1;--accent:#3550e0;--onaccent:#fff;--me:#dfe5fb;--code:#e3e7df;--err:#b3261e}
+:root[data-theme=galaxy]{--bg:#0f0a1e;--panel:#171030;--ink:#ece8f8;--mute:#9a92b8;--line:#2d2250;--accent:#b794ff;--onaccent:#1a0b3a;--me:#2e1f5c;--code:#0a0716}
+[data-theme=galaxy] body{background:radial-gradient(1.2px 1.2px at 12% 18%,rgba(255,255,255,.75),transparent 60%),radial-gradient(1px 1px at 38% 62%,rgba(255,255,255,.6),transparent 60%),radial-gradient(1.4px 1.4px at 71% 27%,rgba(220,200,255,.8),transparent 60%),radial-gradient(1px 1px at 86% 74%,rgba(255,255,255,.55),transparent 60%),radial-gradient(1px 1px at 55% 92%,rgba(255,255,255,.5),transparent 60%),radial-gradient(900px 520px at 15% 0%,rgba(140,80,255,.18),transparent 70%),radial-gradient(800px 520px at 100% 100%,rgba(220,90,220,.11),transparent 70%),var(--bg);background-size:340px 340px,340px 340px,340px 340px,340px 340px,340px 340px,auto,auto,auto;background-attachment:scroll,scroll,scroll,scroll,scroll,fixed,fixed,scroll}
 *{box-sizing:border-box}
 html,body{height:100%;margin:0}
 body{background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;display:flex}
@@ -460,8 +520,8 @@ pre code{background:none;padding:0}
 .empty h2{font:600 26px/1.25 Georgia,serif;margin:0 0 8px}
 .empty p{color:var(--mute);margin:0 0 18px}
 .chips{display:flex;gap:8px;justify-content:center;flex-wrap:wrap}
-#status{max-width:760px;width:100%;margin:0 auto;padding:0 16px;color:#ff9b93;font-size:14px;min-height:0}
-@media (prefers-color-scheme:dark){#status{color:#ff9b93}}
+#status{max-width:760px;width:100%;margin:0 auto;padding:0 16px;color:var(--err);font-size:14px;min-height:0}
+
 .composer{border-top:1px solid var(--line);padding:12px 16px}
 .row{max-width:760px;margin:0 auto;display:flex;gap:8px;align-items:flex-end}
 .row textarea{flex:1;max-height:200px;resize:none}
@@ -528,6 +588,65 @@ dialog code{font-size:12px}
 .abtn svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 .abtn svg.face{width:22px;height:22px;stroke-width:40}
 input[type=range]{padding:0;border:0;background:none;accent-color:var(--accent)}
+.vwrap{position:relative;margin-top:0!important}
+.vexp{position:absolute;top:6px;right:6px;width:30px;height:30px;border:0;border-radius:8px;background:rgba(0,0,0,.55);color:#fff;display:grid;place-items:center;opacity:.85}
+.vexp:hover,.vexp:focus-visible{opacity:1;background:rgba(0,0,0,.8)}
+.vexp svg,#vvclose svg,.vvnav svg{stroke:#fff;fill:none;stroke-linecap:round;stroke-linejoin:round}
+.vexp svg{width:16px;height:16px;stroke-width:2}
+#vview{position:fixed;inset:0;z-index:100;background:#000;display:flex;align-items:center;justify-content:center;outline:none}
+#vview[hidden]{display:none}
+#vvstage{width:100%;height:100%;display:flex;align-items:center;justify-content:center}
+#vvstage video,#vvstage img{width:100%;height:100%;object-fit:contain}
+#vvbar{position:absolute;top:16px;left:16px;z-index:3;display:flex;gap:10px;align-items:stretch}
+#vvadd{display:flex;align-items:center;gap:8px;padding:10px 14px;border:0;border-radius:10px;background:rgba(0,0,0,.6);color:#fff;font-size:15px}
+#vvadd:hover,#vvadd:focus-visible{background:rgba(0,0,0,.85)}
+#vvadd svg{width:20px;height:20px;stroke:#fff;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+#vvpick{position:absolute;top:72px;left:16px;z-index:4;width:300px;max-height:65vh;overflow:auto;padding:12px;border-radius:12px;background:rgba(18,18,20,.97);border:1px solid #333;color:#fff}
+.vvph{font-weight:600;margin-bottom:8px}
+#vvpl button{display:block;width:100%;text-align:left;margin:3px 0;padding:9px 10px;border:0;border-radius:8px;background:#26262a;color:#fff}
+#vvpl button:hover,#vvpl button:focus-visible{background:#3a3a44}
+.vvpn{display:flex;gap:6px;margin-top:10px}
+.vvpn input{flex:1;min-width:0;padding:8px;background:#111;color:#fff;border:1px solid #444;border-radius:8px}
+.vvpn button{border:0;border-radius:8px;padding:8px 10px;background:var(--accent);color:var(--onaccent);font-weight:600}
+#vvpmsg{margin-top:6px;font-size:12px;color:#ffb4a9}
+@media (max-width:800px){#vvtitle{top:72px}}
+#vvsel{display:flex;align-items:center;gap:10px;margin:0;padding:10px 14px;border-radius:10px;background:rgba(0,0,0,.6);color:#fff;font-size:15px;cursor:pointer}
+#vvsel input{width:26px;height:26px;margin:0;padding:0;accent-color:var(--accent);cursor:pointer}
+#vvtitle{position:absolute;top:16px;left:50%;transform:translateX(-50%);z-index:3;max-width:min(40%,480px);color:#fff;font-size:14px;text-align:center;white-space:pre-line;overflow:hidden;text-overflow:ellipsis;text-shadow:0 1px 4px #000}
+#vvclose{position:absolute;top:16px;right:16px;z-index:3;width:44px;height:44px;border:0;border-radius:10px;background:rgba(0,0,0,.6);display:grid;place-items:center}
+#vvclose svg{width:22px;height:22px;stroke-width:2.2}
+.vvnav{position:absolute;top:50%;transform:translateY(-50%);z-index:3;width:56px;height:96px;border:0;border-radius:12px;background:rgba(0,0,0,.5);display:grid;place-items:center}
+.vvnav:hover,.vvnav:focus-visible,#vvclose:hover{background:rgba(0,0,0,.8)}
+.vvnav svg{width:34px;height:34px;stroke-width:2.2}
+#vvprev{left:12px}#vvnext{right:12px}
+#fsec{margin:12px 0 6px}
+.frow{display:flex;gap:18px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+.fnew{background:none;border:0;color:var(--accent);font-weight:600;font-size:14px;display:flex;align-items:center;gap:8px;padding:4px 2px;margin:0!important}
+.fnew.sub{color:var(--mute);font-weight:500}
+.fnew[hidden]{display:none}
+.fcard>span{display:grid;place-items:center;flex:none}
+.fnew svg,.fcard svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
+#fgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px}
+#fgrid:empty{display:none}
+.fcard{display:flex;align-items:center;gap:10px;background:var(--panel);border:1px solid transparent;border-radius:10px;padding:10px;cursor:pointer;min-width:0;color:var(--ink)}
+.fcard:hover{border-color:var(--line)}
+.fcard.drop{border-color:var(--accent);background:var(--me)}
+.fcard input[type=checkbox]{width:18px;height:18px;margin:0;padding:0;flex:none;accent-color:var(--accent);cursor:pointer}
+.fcard .fname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px}
+.fcard .fedit{flex:1;min-width:0;padding:4px 8px;background:var(--bg);border:1px solid var(--accent);border-radius:6px;color:var(--ink)}
+.fcard .fdots,.fcard .fok{background:none;border:0;color:var(--mute);width:28px;height:28px;border-radius:6px;display:grid;place-items:center;flex:none;padding:0}
+.fcard .fdots:hover,.fcard .fok:hover{background:var(--bg);color:var(--ink)}
+.fcard .fdots svg{fill:currentColor;stroke:none;width:18px;height:18px}
+#fmenu{position:fixed;z-index:60;min-width:160px;padding:4px;border-radius:10px;background:var(--panel);border:1px solid var(--line);box-shadow:0 10px 28px rgba(0,0,0,.5)}
+#fmenu[hidden]{display:none}
+#fmenu button{display:block;width:100%;text-align:left;background:none;border:0;padding:8px 10px;border-radius:6px;color:var(--ink)}
+#fmenu button:hover,#fmenu button:focus-visible{background:var(--bg)}
+.dragghost{position:fixed;top:-200px;left:-200px;padding:8px 12px;border-radius:8px;background:var(--accent);color:var(--onaccent);font-weight:600}
+.vc{border-radius:10px}
+.vc.sel{outline:2px solid var(--accent);outline-offset:2px}
+.vgrip{position:absolute;top:6px;left:6px;width:30px;height:30px;border-radius:8px;background:rgba(0,0,0,.55);display:grid;place-items:center;cursor:grab;opacity:.85}
+.vgrip:hover{opacity:1;background:rgba(0,0,0,.8)}
+.vgrip svg{width:16px;height:16px;fill:#fff;stroke:none}
 #status.ok{color:var(--mute)}
 .doc{display:flex;gap:6px;align-items:center;font-size:13px;margin-bottom:4px}
 .doc span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -599,8 +718,34 @@ dialog .btn{margin-right:6px;margin-top:8px}
  <label for="vdest" style="margin-top:8px">Send the ticked videos to this folder (it is created if needed)</label><input id="vdest" placeholder="~/Videos/Highlights">
  <label for="vmode" style="margin-top:8px">How</label><select id="vmode"><option value="link">Keep the originals too (no extra space on the same drive)</option><option value="copy">Copy (originals stay, uses more space)</option><option value="move">Move the files</option></select>
  <div id="vmsg" role="status" style="margin-top:8px"></div>
+ <div id="fsec" hidden>
+  <div class="frow">
+   <button class="fnew" id="fnew"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><path d="M12 11v6M9 14h6"/></svg><span>Create Folder</span></button>
+   <button class="fnew sub" id="fup" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg><span>Up one level</span></button>
+   <button class="fnew sub" id="fdel" hidden><span>Delete ticked folders</span></button>
+  </div>
+  <div id="fgrid"></div>
+ </div>
  <div id="vgrid"></div>
  <button class="btn" id="vgo">Send ticked videos</button><button class="btn ghost" id="vundo">Undo last run</button><button class="btn ghost" id="vclose">Close</button>
+ <div id="fmenu" hidden role="menu"></div>
+ <div id="vview" hidden tabindex="-1" role="dialog" aria-label="Full screen viewer">
+  <div id="vvbar">
+   <label id="vvsel" title="Select this file (S)"><input type="checkbox" id="vvcb"><span>Select</span></label>
+   <button id="vvadd" aria-haspopup="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><path d="M12 11v6M9 14h6"/></svg><span>Add to folder</span></button>
+  </div>
+  <div id="vvpick" hidden>
+   <div class="vvph">Add to folder</div>
+   <div id="vvpl"></div>
+   <div class="vvpn"><input id="vvpname" type="text" placeholder="New folder name" maxlength="80"><button id="vvpmk">Create and add</button></div>
+   <div id="vvpmsg"></div>
+  </div>
+  <div id="vvtitle"></div>
+  <button id="vvclose" aria-label="Close full screen"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+  <button class="vvnav" id="vvprev" aria-label="Previous file"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
+  <button class="vvnav" id="vvnext" aria-label="Next file"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18l6-6-6-6"/></svg></button>
+  <div id="vvstage"></div>
+ </div>
 </dialog>
 <dialog id="ghdlg" style="max-width:640px"><h2>Upload to GitHub</h2>
  <p class="hint">Uploads a folder to a GitHub repository as one commit. Three steps.</p>
@@ -656,6 +801,7 @@ dialog .btn{margin-right:6px;margin-top:8px}
  <button class="btn ghost" id="shclose">Close</button>
 </dialog>
 <dialog id="setdlg"><h2>Settings</h2>
+ <div class="set"><label for="theme">Theme</label><select id="theme"><option value="">Default (dark)</option><option value="light">Light</option><option value="galaxy">Galaxy (purple)</option></select></div>
  <div class="set"><label for="model">Model</label><select id="model"></select>
   <p class="hint">The AI that answers you. Smaller models are faster.</p></div>
  <div class="set"><label for="mode">Mode</label><select id="mode"><option value="chat">Chat</option><option value="game">Game helper</option></select>
@@ -673,6 +819,21 @@ dialog .btn{margin-right:6px;margin-top:8px}
   <label for="vpitch" style="margin-top:8px">Pitch <span id="vpitchv"></span></label><input type="range" id="vpitch" min="0.6" max="1.6" step="0.1" value="1">
   <button class="btn ghost" id="vprev">Preview voice</button>
   <p class="hint">The voices come from your computer and browser. Chrome and Edge usually have several, including natural-sounding ones.</p></div>
+ <div class="set"><label>App icon</label>
+  <div style="display:flex;gap:12px;align-items:center">
+   <img id="icprev" width="64" height="64" alt="Current app icon" style="background:repeating-conic-gradient(#7a7a7a 0 25%,#5c5c5c 0 50%) 0 0/16px 16px">
+   <div><button class="btn ghost" id="icpick" style="margin:0">Choose an image</button><input type="file" id="icfile" accept="image/*" hidden></div>
+  </div>
+  <div id="icopts" hidden>
+   <label for="icfit" style="margin-top:8px">How to fit it</label><select id="icfit"><option value="fill">Fill the square (crops the edges)</option><option value="fit">Keep the whole picture (adds padding)</option></select>
+   <label for="icshape" style="margin-top:8px">Shape</label><select id="icshape"><option value="rounded">Rounded square</option><option value="circle">Circle</option><option value="square">Square</option></select>
+   <label for="icbg" style="margin-top:8px">Background color</label><input type="color" id="icbg" value="#141517" style="height:36px;padding:2px">
+   <label style="margin-top:6px"><input type="checkbox" id="ictrans" style="width:auto"> Transparent background</label>
+   <button class="btn" id="icsave">Save icon</button>
+  </div>
+  <div id="icmsg" class="hint" role="status" style="margin-top:6px"></div>
+  <button class="btn ghost" id="icshort">Update my desktop shortcut</button><button class="btn ghost" id="icreset">Reset to default</button>
+  <p class="hint">Any picture works. It is cropped or padded to a perfect square and saved at every size your computer needs (16 to 512 pixels). The window picture changes right away, and the taskbar picture the next time you open Atlas.</p></div>
  <div class="smsg" role="status"></div>
  <button class="btn" id="setclose">Done</button>
 </dialog>
@@ -1012,23 +1173,132 @@ function vcount(){vsay(VF.length+" videos, "+VF.filter(v=>v.sel).length+" ticked
 function vRender(){
  const g=$("vgrid");g.innerHTML="";
  const io=new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting){e.target.src=e.target.dataset.src;io.unobserve(e.target)}}),{root:g});
- VF.forEach(v=>{
+ VF.forEach((v,idx)=>{
   const c=document.createElement("div");c.className="vc";
+  v.el=c;c.draggable=true;c.addEventListener("dragstart",e=>vDrag(e,v));c.addEventListener("dragend",vDragEnd);
   const isImg=/\.(jpe?g|png|gif|webp|bmp|tiff?|heic|avif)$/i.test(v.name),vid=document.createElement(isImg?"img":"video");
   if(isImg){vid.alt=v.name;vid.style.cssText="width:100%;aspect-ratio:16/9;object-fit:contain;background:#000;border-radius:8px"}else{vid.controls=true;vid.muted=true;vid.preload="metadata"}
   vid.dataset.src=vsrc(v)+(isImg?"":"#t=1");
+  vid.draggable=false;if(!isImg)vid.addEventListener("mousedown",()=>{c.draggable=false});
+  if(!isImg)vid.setAttribute("controlsList","nofullscreen");
+  vid.ondblclick=()=>vvOpen(idx);
+  if(isImg){vid.style.cursor="zoom-in";vid.onclick=()=>vvOpen(idx)}
   const lab=document.createElement("label"),cb=document.createElement("input"),t=document.createElement("span");
   lab.style.cssText="display:flex;gap:6px;align-items:flex-start;margin:4px 0;color:var(--ink)";
-  cb.type="checkbox";cb.checked=!!v.sel;cb.style.width="auto";cb.onchange=()=>{v.sel=cb.checked;vcount()};
+  cb.type="checkbox";cb.checked=!!v.sel;cb.style.width="auto";cb.onchange=()=>{v.sel=cb.checked;vmark(v);vcount()};v.cb=cb;vmark(v);
   t.textContent=v.name+" ("+v.mb+" MB)";lab.append(cb,t);
   const ai=document.createElement("button");ai.className="btn ghost";ai.style.cssText="padding:3px 8px;font-size:12px";ai.textContent="Ask AI about this";
   ai.onclick=async()=>{
    try{if(isImg){PA.imgs.push(await shrink(await(await fetch(vsrc(v))).blob()))}else{const n=await watch(vsrc(v),v.name,vsay);PA.notes.push(n);PA.labels.push(v.name)}renderPA();$("vdlg").close();$("input").focus();status("Video notes attached. Ask your question.",true)}
    catch(e){vsay(e.message)}
   };
-  c.append(vid,lab,ai);g.append(c);io.observe(vid);
+  const wrap=document.createElement("div"),ex=document.createElement("button");
+  wrap.className="vwrap";ex.className="vexp";ex.title="Full screen";ex.setAttribute("aria-label","Full screen: "+v.name);ex.innerHTML=ICON.expand;ex.onclick=()=>vvOpen(idx);
+  const grip=document.createElement("div");grip.className="vgrip";grip.title="Drag to a folder";grip.innerHTML=ICON.grip;
+  wrap.append(vid,ex,grip);c.append(wrap,lab,ai);g.append(c);io.observe(vid);
  });
 }
+let VFD=[],VUP="",VCUR="",FSEL=new Set(),FNEW=false,dragFiles=[];
+function vmark(v){if(v.cb)v.cb.checked=!!v.sel;if(v.el)v.el.classList.toggle("sel",!!v.sel)}
+function vDrag(e,v){
+ const set=v.sel?VF.filter(x=>x.sel):[v];
+ dragFiles=set.map(x=>x.path);
+ e.dataTransfer.effectAllowed="move";e.dataTransfer.setData("text/plain",set.length+" files");
+ const g=document.createElement("div");g.className="dragghost";g.textContent=set.length>1?set.length+" files":v.name;
+ $("vdlg").append(g);e.dataTransfer.setDragImage(g,12,12);setTimeout(()=>g.remove(),0);
+}
+function vDragEnd(){dragFiles=[];document.querySelectorAll(".fcard.drop").forEach(x=>x.classList.remove("drop"))}
+document.addEventListener("mouseup",()=>{VF.forEach(x=>{if(x.el)x.el.draggable=true})});
+async function vLoad(final){
+ try{
+  vsay("Loading\u2026");VCUR=$("vfolder").value;
+  const j=await api("/api/videos",{folder:VCUR,deep:$("vdeep").checked});
+  VF=j.videos;VFD=j.folders||[];VUP=j.parent||"";FNEW=false;FSEL.clear();fRender();vRender();
+  vsay(final||(VF.length?VF.length+" files. Tick the ones you want, or drag them onto a folder.":"No video or image files here. Try another folder, or tick the subfolders box."));
+ }catch(e){vsay(e.message)}
+}
+async function vFolders(){const j=await api("/api/videos",{folder:VCUR,deep:$("vdeep").checked});VFD=j.folders||[];VUP=j.parent||"";fRender()}
+function openFolder(path){$("vfolder").value=path;S.vfolder=path;save();$("vload").click()}
+async function moveInto(f,files){
+ try{
+  vsay("Moving "+files.length+" file"+(files.length>1?"s":"")+"\u2026");
+  const j=await api("/api/send",{files,dest:f.path,mode:"move"});
+  await vLoad("Moved "+j.n+" file"+(j.n===1?"":"s")+" into "+f.name+". Undo last run puts them back.");
+ }catch(e){vsay(e.message)}
+}
+async function makeFolder(name){
+ try{const j=await api("/api/folder",{action:"create",folder:VCUR||$("vfolder").value,name});FNEW=false;await vFolders();vsay('Created the folder "'+j.name+'". Drag files onto it.')}
+ catch(e){vsay(e.message)}
+}
+function fMenu(f,btn){
+ const m=$("fmenu");m.innerHTML="";
+ [["Open",()=>openFolder(f.path)],["Rename",async()=>{
+   const n=prompt("New name for this folder",f.name);if(!n||n.trim()===f.name)return;
+   try{await api("/api/folder",{action:"rename",folder:VCUR,name:f.name,new:n});await vLoad("Renamed.")}catch(e){vsay(e.message)}
+  }],["Delete (only if empty)",async()=>{
+   try{await api("/api/folder",{action:"delete",folder:VCUR,name:f.name});await vLoad('Deleted the empty folder "'+f.name+'".')}catch(e){vsay(e.message)}
+  }]].forEach(([t,fn])=>{const b=document.createElement("button");b.textContent=t;b.onclick=()=>{m.hidden=true;fn()};m.append(b)});
+ const r=btn.getBoundingClientRect();m.style.left=Math.max(8,Math.min(r.left-120,innerWidth-176))+"px";m.style.top=(r.bottom+4)+"px";m.hidden=false;m.firstChild.focus();
+}
+function fRender(){
+ $("fsec").hidden=false;$("fup").hidden=!VUP;$("fdel").hidden=!FSEL.size;
+ const g=$("fgrid");g.innerHTML="";
+ if(FNEW){
+  const c=document.createElement("div"),ic=document.createElement("span"),i=document.createElement("input"),ok=document.createElement("button");
+  c.className="fcard";ic.innerHTML=ICON.folder;i.className="fedit";i.type="text";i.maxLength=80;i.placeholder="Folder name";i.setAttribute("aria-label","New folder name");
+  ok.className="fok";ok.setAttribute("aria-label","Create folder");ok.innerHTML=ICON.check;ok.onclick=()=>makeFolder(i.value);
+  i.onkeydown=e=>{if(e.key==="Enter")makeFolder(i.value);else if(e.key==="Escape"){e.preventDefault();e.stopPropagation();FNEW=false;fRender()}};
+  c.append(ic,i,ok);g.append(c);i.focus();
+ }
+ VFD.forEach(f=>{
+  const c=document.createElement("div"),cb=document.createElement("input"),ic=document.createElement("span"),nm=document.createElement("div"),dots=document.createElement("button");
+  c.className="fcard";c.tabIndex=0;c.title=f.name+" ("+f.count+" file"+(f.count===1?"":"s")+")";
+  cb.type="checkbox";cb.checked=FSEL.has(f.name);cb.setAttribute("aria-label","Select folder "+f.name);
+  cb.onclick=e=>e.stopPropagation();cb.onchange=()=>{if(cb.checked)FSEL.add(f.name);else FSEL.delete(f.name);$("fdel").hidden=!FSEL.size};
+  ic.innerHTML=ICON.folder;nm.className="fname";nm.textContent=f.name;
+  dots.className="fdots";dots.innerHTML=ICON.dots;dots.setAttribute("aria-label","Folder options for "+f.name);dots.onclick=e=>{e.stopPropagation();fMenu(f,dots)};
+  c.onclick=()=>openFolder(f.path);c.onkeydown=e=>{if(e.key==="Enter"&&e.target===c)openFolder(f.path)};
+  c.addEventListener("dragover",e=>{if(dragFiles.length){e.preventDefault();e.dataTransfer.dropEffect="move";c.classList.add("drop")}});
+  c.addEventListener("dragleave",e=>{if(!c.contains(e.relatedTarget))c.classList.remove("drop")});
+  c.addEventListener("drop",e=>{e.preventDefault();c.classList.remove("drop");if(dragFiles.length)moveInto(f,dragFiles.slice())});
+  c.append(cb,ic,nm,dots);g.append(c);
+ });
+}
+function renderPick(){
+ const L=$("vvpl");L.innerHTML="";$("vvpmsg").textContent="";
+ if(!VFD.length){L.textContent="No folders yet. Name one below.";L.style.cssText="font-size:13px;color:#bbb"}else L.style.cssText="";
+ VFD.forEach(f=>{const b=document.createElement("button");b.textContent=f.name;b.onclick=()=>vvAddTo(f);L.append(b)});
+}
+async function vvAddTo(f){
+ const v=VF[VI];if(!v)return;
+ try{
+  await api("/api/send",{files:[v.path],dest:f.path,mode:"move"});
+  $("vvpick").hidden=true;VF.splice(VI,1);vRender();vFolders().catch(()=>{});
+  if(!VF.length){vvClose();vsay("Moved the last file into "+f.name+".");return}
+  vvShow(VI);vsay("Moved "+v.name+" into "+f.name+". Undo last run puts it back.");
+ }catch(e){$("vvpmsg").textContent=e.message}
+}
+const IMGRX=/\.(jpe?g|png|gif|webp|bmp|tiff?|heic|avif)$/i;
+let VI=-1;
+function vvStop(){const st=$("vvstage");st.querySelectorAll("video").forEach(x=>{x.pause();x.removeAttribute("src");x.load()});st.innerHTML=""}
+function vvShow(i){
+ if(!VF.length)return;
+ $("vvpick").hidden=true;
+ VI=(i+VF.length)%VF.length;
+ const v=VF[VI],img=IMGRX.test(v.name);vvStop();
+ const el=document.createElement(img?"img":"video");el.src=vsrc(v);
+ if(img)el.alt=v.name;else{el.controls=true;el.setAttribute("controlsList","nofullscreen");el.autoplay=true}
+ $("vvstage").append(el);if(!img)el.play().catch(()=>{});
+ $("vvcb").checked=!!v.sel;
+ $("vvtitle").textContent=v.name+" ("+(VI+1)+" of "+VF.length+")\n\u2190 \u2192 move   S select   Esc close";
+}
+function vvOpen(i){
+ $("vview").hidden=false;vvShow(i);$("vview").focus();
+ const r=$("vview").requestFullscreen&&$("vview").requestFullscreen();if(r&&r.catch)r.catch(()=>{});
+}
+function vvHide(){vvStop();$("vview").hidden=true;vcount()}
+function vvClose(){vvHide();if(document.fullscreenElement)document.exitFullscreen().catch(()=>{})}
+function vvToggle(){const v=VF[VI];if(!v)return;v.sel=!v.sel;$("vvcb").checked=v.sel;vmark(v)}
 function csay(t){$("cmsg").textContent=fixErr(t)||""}
 function ccount(){csay(CF.length+" files, "+CF.filter(v=>v.sel).length+" ticked.")}
 function cRender(){
@@ -1152,6 +1422,11 @@ const ICON={
  check:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg>',
  face:'<svg class="face" viewBox="180 180 620 620" aria-hidden="true"><path d="M490 232C400 232 312 320 312 450C312 570 340 700 490 700C640 700 668 570 668 450C668 320 580 232 490 232Z"/><path d="M312 448C262 462 250 568 322 592M668 448C718 462 730 568 658 592"/><path d="M410 690L388 750M573 690L592 750"/><path d="M380 432Q415 490 450 432M532 432Q567 490 602 432"/><path d="M452 578Q490 598 528 578"/><path d="M240 268L283 300M743 268L700 300M212 396H250M732 396H768"/></svg>'
 };
+ICON.expand='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>';
+ICON.folder='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>';
+ICON.folderplus='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><path d="M12 11v6M9 14h6"/></svg>';
+ICON.dots='<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="12" cy="19" r="1.7"/></svg>';
+ICON.grip='<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg>';
 function abtn(svg,label,fn){
  const b=document.createElement("button");
  b.className="abtn";b.innerHTML=svg;b.title=label;b.setAttribute("aria-label",label);b.onclick=fn;return b;
@@ -1191,6 +1466,31 @@ function fillVoices(){
  });
  sel.value=S.voice||"";
 }
+
+let ICOIMG=null;
+function icsay(t){$("icmsg").textContent=t||""}
+function setFavicon(v){
+ document.querySelectorAll('link[rel="icon"]').forEach(l=>l.remove());
+ const l=document.createElement("link");l.rel="icon";l.type="image/png";l.href="/icon.png?v="+v;document.head.append(l);$("icprev").src=l.href;
+}
+function rr(x,s,r){x.moveTo(r,0);x.arcTo(s,0,s,s,r);x.arcTo(s,s,0,s,r);x.arcTo(0,s,0,0,r);x.arcTo(0,0,s,0,r);x.closePath()}
+function iconCanvas(size){
+ const cv=document.createElement("canvas");cv.width=cv.height=size;
+ const x=cv.getContext("2d"),sh=$("icshape").value,r=sh==="circle"?size/2:sh==="rounded"?size*0.2237:0;
+ x.imageSmoothingQuality="high";x.beginPath();if(r>0)rr(x,size,r);else x.rect(0,0,size,size);x.clip();
+ if(!$("ictrans").checked){x.fillStyle=$("icbg").value;x.fillRect(0,0,size,size)}
+ const w=ICOIMG.naturalWidth||ICOIMG.width,h=ICOIMG.naturalHeight||ICOIMG.height;
+ const sc=$("icfit").value==="fill"?Math.max(size/w,size/h):Math.min(size/w,size/h)*0.9;
+ x.drawImage(ICOIMG,(size-w*sc)/2,(size-h*sc)/2,w*sc,h*sc);
+ return cv;
+}
+function scaled(src,size){
+ let c=src;
+ while(c.width/2>=size){const t=document.createElement("canvas");t.width=t.height=c.width/2;const x=t.getContext("2d");x.imageSmoothingQuality="high";x.drawImage(c,0,0,t.width,t.height);c=t}
+ const o=document.createElement("canvas");o.width=o.height=size;const x=o.getContext("2d");x.imageSmoothingQuality="high";x.drawImage(c,0,0,size,size);return o;
+}
+function icPreview(){if(ICOIMG)$("icprev").src=iconCanvas(128).toDataURL()}
+function applyTheme(){const t=S.theme||"";document.documentElement.dataset.theme=t;try{localStorage.setItem("atlasTheme",t)}catch(e){}}
 
 async function send(text){
  if(busy){ctl&&ctl.abort();return}
@@ -1290,17 +1590,63 @@ document.addEventListener("click",e=>{if(!e.target.closest("#toolmenu,#toolsbtn"
 document.addEventListener("keydown",e=>{if(e.key==="Escape"&&!$("toolmenu").hidden){toolMenu(false);$("toolsbtn").focus()}});
 $("gearbtn").onclick=openSettings;$("modelchip").onclick=openSettings;
 $("setclose").onclick=()=>$("setdlg").close();
+$("theme").onchange=e=>{S.theme=e.target.value;applyTheme();save()};
+$("icpick").onclick=()=>$("icfile").click();
+["icfit","icshape","icbg","ictrans"].forEach(id=>$(id).addEventListener("input",icPreview));
+$("icfile").onchange=async e=>{
+ const f=e.target.files[0];e.target.value="";if(!f)return;
+ try{
+  const im=await new Promise((res,rej)=>{const i=new Image(),u=URL.createObjectURL(f);i.onload=()=>{URL.revokeObjectURL(u);res(i)};i.onerror=()=>rej(new Error("Couldn't read that image."));i.src=u});
+  if(!im.naturalWidth)throw new Error("Couldn't read that image.");
+  const m=Math.max(im.naturalWidth,im.naturalHeight);let src=im;
+  if(m>1536){const k=1536/m,c=document.createElement("canvas");c.width=Math.round(im.naturalWidth*k);c.height=Math.round(im.naturalHeight*k);const x=c.getContext("2d");x.imageSmoothingQuality="high";x.drawImage(im,0,0,c.width,c.height);src=c}
+  ICOIMG=src;$("icopts").hidden=false;icPreview();icsay("Looks right? Adjust the options if you like, then click Save icon.");
+ }catch(err){icsay(err.message)}
+};
+$("icsave").onclick=async()=>{
+ if(!ICOIMG)return;
+ try{
+  icsay("Saving\u2026");
+  const master=iconCanvas(512),sizes={};
+  [16,24,32,48,64,128,256,512].forEach(n=>{sizes[n]=(n===512?master:scaled(master,n)).toDataURL("image/png").split(",")[1]});
+  const j=await api("/api/icon",{action:"save",sizes});
+  ICOIMG=null;$("icopts").hidden=true;setFavicon(j.v);
+  icsay("Saved. To use it on your desktop shortcut too, click Update my desktop shortcut.");
+ }catch(err){icsay(err.message)}
+};
+$("icshort").onclick=async()=>{try{await api("/api/icon",{action:"shortcut"});icsay("Done. If you see an old shortcut next to the new one, delete the old one. Windows can take a moment to show the new picture.")}catch(err){icsay(err.message)}};
+$("icreset").onclick=async()=>{try{await api("/api/icon",{action:"reset"});location.reload()}catch(err){icsay(err.message)}};
 $("voicesel").onchange=e=>{S.voice=e.target.value;save()};
 $("vrate").oninput=e=>{S.rate=+e.target.value;vlabels();save()};
 $("vpitch").oninput=e=>{S.pitch=+e.target.value;vlabels();save()};
 $("vprev").onclick=()=>speak("Hi! This is how I sound. Pick the voice you like best.");
 $("docsbtn").onclick=()=>$("docdlg").showModal();$("docclose").onclick=()=>$("docdlg").close();
 $("vids").onclick=openVideos;$("gh").onclick=openGH;
-$("vclose").onclick=()=>$("vdlg").close();$("ghclose").onclick=()=>$("ghdlg").close();
-$("vload").onclick=async()=>{
- try{vsay("Loading\u2026");const j=await api("/api/videos",{folder:$("vfolder").value,deep:$("vdeep").checked});VF=j.videos;vRender();
-  vsay(VF.length?VF.length+" videos. Tick the ones you want.":"No video files found there. Try the folder that holds them, or tick the subfolders box.")}
- catch(e){vsay(e.message)}
+$("vclose").onclick=()=>$("vdlg").close();
+$("vvprev").onclick=()=>vvShow(VI-1);$("vvnext").onclick=()=>vvShow(VI+1);$("vvclose").onclick=vvClose;
+$("vvcb").onchange=()=>{const v=VF[VI];v.sel=$("vvcb").checked;vmark(v)};
+$("vview").addEventListener("keydown",e=>{
+ if(e.target.tagName==="INPUT"&&e.target.type==="text"){if(e.key==="Enter"){e.preventDefault();$("vvpmk").click()}else if(e.key==="Escape"){e.preventDefault();$("vvpick").hidden=true;$("vview").focus()}return}
+ if(e.key==="ArrowRight"){e.preventDefault();vvShow(VI+1)}
+ else if(e.key==="ArrowLeft"){e.preventDefault();vvShow(VI-1)}
+ else if(e.key==="s"||e.key==="S"){e.preventDefault();vvToggle()}
+ else if(e.key==="Escape"&&!document.fullscreenElement){e.preventDefault();vvClose()}
+});
+document.addEventListener("fullscreenchange",()=>{if(!document.fullscreenElement&&!$("vview").hidden)vvHide()});
+$("vdlg").addEventListener("cancel",e=>{if(!$("vview").hidden){e.preventDefault();vvClose()}else if(FNEW){e.preventDefault();FNEW=false;fRender()}});$("ghclose").onclick=()=>$("ghdlg").close();
+$("vload").onclick=()=>vLoad();
+$("fnew").onclick=()=>{FNEW=true;fRender()};
+$("fup").onclick=()=>{if(VUP)openFolder(VUP)};
+$("fdel").onclick=async()=>{
+ let ok=0,skip=0;
+ for(const n of [...FSEL]){try{await api("/api/folder",{action:"delete",folder:VCUR,name:n});ok++}catch(e){skip++}}
+ await vLoad("Deleted "+ok+" empty folder"+(ok===1?"":"s")+(skip?". Skipped "+skip+" that still have files in them.":"."));
+};
+document.addEventListener("click",e=>{if(!e.target.closest("#fmenu,.fdots"))$("fmenu").hidden=true});
+$("vvadd").onclick=()=>{if($("vvpick").hidden){renderPick();$("vvpname").value="";$("vvpick").hidden=false}else $("vvpick").hidden=true};
+$("vvpmk").onclick=async()=>{
+ const n=$("vvpname").value.trim();if(!n){$("vvpmsg").textContent="Type a folder name first.";return}
+ try{const f=await api("/api/folder",{action:"create",folder:VCUR,name:n});await vvAddTo(f)}catch(e){$("vvpmsg").textContent=e.message}
 };
 $("vall").onclick=()=>{VF.forEach(v=>v.sel=true);vRender();vcount()};
 $("vnone").onclick=()=>{VF.forEach(v=>v.sel=false);vRender();vcount()};
@@ -1333,7 +1679,7 @@ $("cgo").onclick=async()=>{
  }
  csay("Converted "+ok+" of "+sel.length+(errs.length?". Problems: "+errs.join(" | "):". They are in the Converted folder next to the originals, or the folder you chose."));
 };
-$("vundo").onclick=async()=>{try{const j=await api("/api/undo");vsay("Undid "+j.n+" videos.");$("vload").click()}catch(e){vsay(e.message)}};
+$("vundo").onclick=async()=>{try{const j=await api("/api/undo");await vLoad(j.n?"Undid "+j.n+" file"+(j.n===1?"":"s")+".":"Nothing to undo. The files may have moved again, or their folder was renamed.")}catch(e){vsay(e.message)}};
 document.addEventListener("click",e=>{const a=e.target.closest("a[data-ext]");if(a){e.preventDefault();api("/api/openurl",{url:a.href}).catch(()=>{})}});
 $("ghtest").onclick=async()=>{
  const L=$("ghlist");
@@ -1416,6 +1762,7 @@ $("undo").onclick=async()=>{try{const j=await api("/api/undo");$("plan").textCon
  try{const r=await fetch("/api/state");Object.assign(S,await r.json())}catch(e){}
  $("system").value=S.system;$("preset").value=S.preset;$("voicesample").value=S.voiceSample||"";fetch("/api/ping").catch(()=>{});setInterval(()=>fetch("/api/ping").catch(()=>{}),15000);$("mode").value=S.mode;$("game").value=S.game;$("notes").value=S.notes;$("gamebox").hidden=S.mode!=="game";
  ["vfolder","vdest","vmode","vdeep","cfolder","cdeep","cfmt","cdest","ghfolder","ghrepo"].forEach(k=>remember(k,k));
+ $("theme").value=S.theme||"";applyTheme();$("icprev").src=document.querySelector('link[rel="icon"][type="image/png"]').href;
  $("vrate").value=S.rate||1;$("vpitch").value=S.pitch||1;vlabels();
  if(window.speechSynthesis){speechSynthesis.onvoiceschanged=fillVoices;fillVoices()}
  try{const r=await fetch("/api/docs");D=await r.json();renderDocs()}catch(e){}
@@ -1468,8 +1815,19 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/shareopen":
             open_folder(str(SHARE["recv"] or default_recv()))
             return {"ok": True}
+        if path == "/api/icon":
+            a = j.get("action")
+            if a == "save":
+                return save_icon(j.get("sizes", {}))
+            if a == "reset":
+                shutil.rmtree(ICONDIR, ignore_errors=True)
+            if a == "shortcut":
+                make_shortcut()
+            return {"custom": os.path.exists(os.path.join(ICONDIR, "icon-256.png"))}
         if path == "/api/convert":
             return convert_file(j["path"], j["fmt"], j.get("dest", ""))
+        if path == "/api/folder":
+            return folder_op(j)
         if path == "/api/send":
             return send_files(j["files"], j["dest"], j.get("mode", "link"))
         if path == "/api/ghtoken":
@@ -1547,10 +1905,16 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self.host_ok():
             return self.reply(403, {"error": "Forbidden"})
+        if self.path.split("?")[0] == "/icon.png":
+            p = os.path.join(ICONDIR, "icon-256.png")
+            if os.path.exists(p):
+                with open(p, "rb") as fh:
+                    return self.reply(200, fh.read(), "image/png")
+            return self.reply(404, {"error": "No custom icon"})
         if self.path.startswith("/api/file?"):
             return self.serve_file()
         if self.path == "/":
-            self.reply(200, PAGE.replace("__TOKEN__", TOKEN), "text/html; charset=utf-8")
+            self.reply(200, page_html(), "text/html; charset=utf-8")
         elif self.path == "/api/caps":  # which installed models can look at images
             try:
                 with urllib.request.urlopen(OLLAMA + "/api/tags", timeout=5) as r:
@@ -1609,7 +1973,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(200, {"ok": True})
             except Exception:
                 self.reply(400, {"error": "Could not save"})
-        elif self.path in ("/api/extract", "/api/url", "/api/plan", "/api/run", "/api/undo", "/api/warm", "/api/docs", "/api/videos", "/api/send", "/api/convert", "/api/share", "/api/shareopen", "/api/ghtoken", "/api/ghcheck", "/api/openurl", "/api/ghplan", "/api/ghgo"):
+        elif self.path in ("/api/extract", "/api/url", "/api/plan", "/api/run", "/api/undo", "/api/warm", "/api/docs", "/api/videos", "/api/send", "/api/folder", "/api/convert", "/api/icon", "/api/share", "/api/shareopen", "/api/ghtoken", "/api/ghcheck", "/api/openurl", "/api/ghplan", "/api/ghgo"):
             try:
                 self.reply(200, self.tool(self.path, raw))
             except Exception as e:
@@ -1637,6 +2001,46 @@ class Handler(BaseHTTPRequestHandler):
                     pass
         else:
             self.reply(404, {"error": "Not found"})
+
+
+# ---------- custom app icon ----------
+def save_icon(sizes):
+    """The page has already cropped and resized the picture. This stores the PNGs and builds .ico and .icns files."""
+    pngs = {}
+    for k, v in sizes.items():
+        n, b = int(k), base64.b64decode(v)
+        if n not in (16, 24, 32, 48, 64, 128, 256, 512) or b[:8] != b"\x89PNG\r\n\x1a\n" or len(b) > 3000000:
+            raise ValueError("That icon data wasn't valid. Try another image.")
+        pngs[n] = b
+    if 256 not in pngs:
+        raise ValueError("That icon data wasn't valid. Try another image.")
+    shutil.rmtree(ICONDIR, ignore_errors=True)
+    os.makedirs(ICONDIR)
+    for n, b in pngs.items():
+        with open(os.path.join(ICONDIR, "icon-%d.png" % n), "wb") as fh:
+            fh.write(b)
+    ents = sorted((n, b) for n, b in pngs.items() if n <= 256)
+    head, dirs, blob, off = struct.pack("<HHH", 0, 1, len(ents)), b"", b"", 6 + 16 * len(ents)
+    for n, b in ents:
+        w = 0 if n >= 256 else n
+        dirs += struct.pack("<BBBBHHII", w, w, 0, 0, 1, 32, len(b), off + len(blob))
+        blob += b
+    with open(os.path.join(ICONDIR, "atlas.ico"), "wb") as fh:
+        fh.write(head + dirs + blob)
+    kinds = {16: b"icp4", 32: b"icp5", 64: b"icp6", 128: b"ic07", 256: b"ic08", 512: b"ic09"}
+    body = b"".join(kinds[n] + struct.pack(">I", 8 + len(b)) + b for n, b in sorted(pngs.items()) if n in kinds)
+    with open(os.path.join(ICONDIR, "atlas.icns"), "wb") as fh:
+        fh.write(b"icns" + struct.pack(">I", 8 + len(body)) + body)
+    return {"v": int(os.path.getmtime(os.path.join(ICONDIR, "icon-256.png"))), "custom": True}
+
+
+def page_html():
+    html = PAGE.replace("__TOKEN__", TOKEN)
+    p = os.path.join(ICONDIR, "icon-256.png")
+    if os.path.exists(p):
+        link = '<link rel="icon" type="image/png" href="/icon.png?v=%d">' % int(os.path.getmtime(p))
+        html = re.sub(r"<!--icon-->.*?<!--/icon-->", lambda m: link, html, flags=re.S)
+    return html
 
 
 # ---------- QR code (versions 1-6, error correction L) ----------
@@ -2064,10 +2468,14 @@ def make_shortcut():
             w = py.replace("python.exe", "pythonw.exe")
             py = w if os.path.exists(w) else py
         target, args = (script, "") if frozen else (py, '"%s"' % script)
+        ico = os.path.join(ICONDIR, "atlas.ico")
+        if not os.path.exists(ico):
+            ico = os.path.join(os.path.dirname(script), "assets", "atlas.ico")
+            ico = ico if os.path.exists(ico) and not frozen else target
         ps = ('$d=[Environment]::GetFolderPath("Desktop");'
               '$s=(New-Object -ComObject WScript.Shell).CreateShortcut($d+"\\Atlas.lnk");'
-              '$s.TargetPath="%s";$s.Arguments=\'%s\';$s.WorkingDirectory="%s";$s.Save()'
-              % (target, args, os.path.dirname(script)))
+              '$s.TargetPath="%s";$s.Arguments=\'%s\';$s.WorkingDirectory="%s";$s.IconLocation="%s,0";$s.Save()'
+              % (target, args, os.path.dirname(script), ico))
         subprocess.run(["powershell", "-NoProfile", "-Command", ps], check=True)
         say("Added 'Atlas' to your Desktop.")
         return
@@ -2079,7 +2487,12 @@ def make_shortcut():
         f.write_text("#!/bin/bash\ncd %s\nexec %s\n" % (shlex.quote(os.path.dirname(script)), cmd))
     else:
         f = desk / "atlas.desktop"
-        f.write_text("[Desktop Entry]\nType=Application\nName=Atlas\nExec=%s\nTerminal=false\n" % cmd)
+        icon = os.path.join(ICONDIR, "icon-256.png")
+        if not os.path.exists(icon):
+            icon = os.path.join(os.path.dirname(script), "assets", "atlas-256.png")
+            icon = icon if not frozen else ""
+        extra = "Icon=%s\n" % icon if icon and os.path.exists(icon) else ""
+        f.write_text("[Desktop Entry]\nType=Application\nName=Atlas\nExec=%s\nTerminal=false\n%s" % (cmd, extra))
     f.chmod(0o755)
     say("Added a shortcut to your Desktop:", f)
 

@@ -1,4 +1,5 @@
-# Atlas
+<p align="center"><img src="assets/atlas-256.png" width="128" alt="Atlas logo"></p>
+<h1 align="center">Atlas</h1>
 
 Atlas is a private AI assistant that runs on your own computer using [Ollama](https://ollama.com). Your chats stay on your machine. It is one Python file with no installs needed to run it.
 
@@ -9,8 +10,10 @@ Atlas is a private AI assistant that runs on your own computer using [Ollama](ht
 - **Voice mode**: talk to it hands-free (Chrome or Edge).
 - **Reference files**: add notes, PDFs or web pages and ask questions about them.
 - **Images and video**: attach a picture or a video clip and ask about it (needs a vision model such as `gemma3:4b`).
+- **Themes and your own icon**: choose dark, light or galaxy (purple), and set any picture as the app icon. It is sized and shaped for you.
+- **Rename files** right in the video and image window, and **keep Ollama up to date** with a switch in Settings (automatic on Windows, one-click download elsewhere).
 - **Game maker**: describe a game, play it in a live preview, and ask for changes.
-- **Tools menu**: organize a folder, preview and send videos and images, convert files (needs ffmpeg), share files with your phone through a QR code, and upload a folder to GitHub.
+- **Tools menu**: organize a folder, preview videos and images, make folders and drag files into them, convert files (needs ffmpeg), share files with your phone through a QR code, and upload a folder to GitHub.
 
 ## Get started
 
@@ -38,7 +41,6 @@ Optional extras:
 - The GitHub uploader skips files that look private and stores your token only on your computer.
 - Your chats are saved in `assistant_data.json` next to the script. It is listed in `.gitignore`, so it won't be uploaded by accident.
 
-## Commands to Know
+## License
 
--python assistant.py (on Mac or Linux, python3 assistant.py)
--Build application: python build_app.py
+Add a license of your choice (GitHub can add one when you create the repository).
