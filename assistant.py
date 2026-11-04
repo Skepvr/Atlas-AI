@@ -8,7 +8,7 @@ Then:  it opens http://localhost:8765 in your browser.
 Needs only Python 3 (no installs). Ollama must be running with at least one model.
 Your chats are saved next to this file in assistant_data.json and never leave your computer.
 """
-import base64, hmac, json, mimetypes, os, re, secrets, shlex, shutil, socket, struct, subprocess, sys, time, threading, webbrowser, urllib.request, urllib.error, urllib.parse
+import base64, hmac, json, mimetypes, os, re, secrets, shlex, shutil, socket, struct, subprocess, sys, tempfile, time, threading, webbrowser, urllib.request, urllib.error, urllib.parse
 from html.parser import HTMLParser
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -177,6 +177,27 @@ def list_videos(folder, deep=False):
     except ValueError:
         parent = ""
     return {"videos": [v for _, v in sorted(items, key=lambda t: -t[0])][:400], "folders": dirs, "parent": parent}
+
+
+def rename_file(path, new):
+    a = Path(path).resolve()
+    if not a.is_file() or a.suffix.lower() not in MEDIA:
+        raise ValueError("That isn't a video or image file.")
+    base = (new or "").strip()
+    if base.lower().endswith(a.suffix.lower()):
+        base = base[:-len(a.suffix)]
+    t = a.with_name(folder_name(base) + a.suffix)  # the extension is kept, so the file still opens
+    if str(t) == str(a):
+        return {"name": a.name, "path": str(a)}
+    if t.exists() and os.path.normcase(str(t)) != os.path.normcase(str(a)):
+        raise ValueError('There is already a file called "%s" here.' % t.name)
+    try:
+        a.rename(t)
+    except PermissionError:
+        raise ValueError("Windows says that file is in use. Close it in any other program and try again.")
+    with open(UNDO, "w") as fh:
+        json.dump([{"src": str(a), "dst": str(t), "mode": "move", "made": False}], fh)
+    return {"name": t.name, "path": str(t)}
 
 
 def folder_name(n):
@@ -552,7 +573,7 @@ summary{cursor:pointer;font-weight:600;font-size:13px;color:var(--mute);padding:
 .icon{background:none;border:1px solid var(--line);border-radius:8px;width:36px;height:36px;display:grid;place-items:center;color:var(--ink)}
 .icon:hover,.icon[aria-expanded="true"]{background:var(--bg)}
 .icon svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
-#toolmenu{position:absolute;top:44px;left:0;right:0;z-index:30;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:6px;box-shadow:0 12px 32px rgba(0,0,0,.55)}
+#toolmenu{max-height:calc(100vh - 90px);overflow:auto;position:absolute;top:44px;left:0;right:0;z-index:30;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:6px;box-shadow:0 12px 32px rgba(0,0,0,.55)}
 #toolmenu[hidden]{display:none}
 #toolmenu button{display:block;width:100%;text-align:left;background:none;border:0;border-radius:8px;padding:7px 10px}
 #toolmenu button:hover,#toolmenu button:focus-visible{background:var(--bg)}
@@ -598,18 +619,19 @@ input[type=range]{padding:0;border:0;background:none;accent-color:var(--accent)}
 #vvstage{width:100%;height:100%;display:flex;align-items:center;justify-content:center}
 #vvstage video,#vvstage img{width:100%;height:100%;object-fit:contain}
 #vvbar{position:absolute;top:16px;left:16px;z-index:3;display:flex;gap:10px;align-items:stretch}
-#vvadd{display:flex;align-items:center;gap:8px;padding:10px 14px;border:0;border-radius:10px;background:rgba(0,0,0,.6);color:#fff;font-size:15px}
-#vvadd:hover,#vvadd:focus-visible{background:rgba(0,0,0,.85)}
-#vvadd svg{width:20px;height:20px;stroke:#fff;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
-#vvpick{position:absolute;top:72px;left:16px;z-index:4;width:300px;max-height:65vh;overflow:auto;padding:12px;border-radius:12px;background:rgba(18,18,20,.97);border:1px solid #333;color:#fff}
+#vvadd,#vvren{display:flex;align-items:center;gap:8px;padding:10px 14px;border:0;border-radius:10px;background:rgba(0,0,0,.6);color:#fff;font-size:15px}
+#vvadd:hover,#vvadd:focus-visible,#vvren:hover,#vvren:focus-visible{background:rgba(0,0,0,.85)}
+#vvadd svg,#vvren svg{width:20px;height:20px;stroke:#fff;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+#vvpick,#vvrn{position:absolute;top:72px;left:16px;z-index:4;width:300px;max-height:65vh;overflow:auto;padding:12px;border-radius:12px;background:rgba(18,18,20,.97);border:1px solid #333;color:#fff}
 .vvph{font-weight:600;margin-bottom:8px}
 #vvpl button{display:block;width:100%;text-align:left;margin:3px 0;padding:9px 10px;border:0;border-radius:8px;background:#26262a;color:#fff}
 #vvpl button:hover,#vvpl button:focus-visible{background:#3a3a44}
 .vvpn{display:flex;gap:6px;margin-top:10px}
 .vvpn input{flex:1;min-width:0;padding:8px;background:#111;color:#fff;border:1px solid #444;border-radius:8px}
 .vvpn button{border:0;border-radius:8px;padding:8px 10px;background:var(--accent);color:var(--onaccent);font-weight:600}
-#vvpmsg{margin-top:6px;font-size:12px;color:#ffb4a9}
-@media (max-width:800px){#vvtitle{top:72px}}
+#vvrnext{align-self:center;color:#bbb;font-size:13px}
+#vvpmsg,#vvrnmsg{margin-top:6px;font-size:12px;color:#ffb4a9}
+@media (max-width:1100px){#vvtitle{top:72px}}
 #vvsel{display:flex;align-items:center;gap:10px;margin:0;padding:10px 14px;border-radius:10px;background:rgba(0,0,0,.6);color:#fff;font-size:15px;cursor:pointer}
 #vvsel input{width:26px;height:26px;margin:0;padding:0;accent-color:var(--accent);cursor:pointer}
 #vvtitle{position:absolute;top:16px;left:50%;transform:translateX(-50%);z-index:3;max-width:min(40%,480px);color:#fff;font-size:14px;text-align:center;white-space:pre-line;overflow:hidden;text-overflow:ellipsis;text-shadow:0 1px 4px #000}
@@ -647,6 +669,69 @@ input[type=range]{padding:0;border:0;background:none;accent-color:var(--accent)}
 .vgrip{position:absolute;top:6px;left:6px;width:30px;height:30px;border-radius:8px;background:rgba(0,0,0,.55);display:grid;place-items:center;cursor:grab;opacity:.85}
 .vgrip:hover{opacity:1;background:rgba(0,0,0,.8)}
 .vgrip svg{width:16px;height:16px;fill:#fff;stroke:none}
+.switch{display:flex;align-items:center;gap:10px;color:var(--ink)!important;font-size:14px!important;cursor:pointer;margin:0 0 4px!important;position:relative}
+.switch input{position:absolute;opacity:0;width:0!important;height:0;margin:0;padding:0;border:0}
+.switch .track{width:44px;height:24px;border-radius:12px;background:var(--line);position:relative;flex:none;transition:background .15s}
+.switch .track::after{content:"";position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:var(--mute);transition:transform .15s,background .15s}
+.switch input:checked+.track{background:var(--accent)}
+.switch input:checked+.track::after{transform:translateX(20px);background:var(--onaccent)}
+.switch input:focus-visible+.track{outline:2px solid var(--accent);outline-offset:2px}
+.vname{display:flex;align-items:flex-start;gap:4px}
+.vname label{flex:1;min-width:0}
+.vren{background:none;border:0;color:var(--mute);width:26px;height:26px;border-radius:6px;display:grid;place-items:center;flex:none;padding:0;margin-top:1px}
+.vren:hover,.vren:focus-visible{background:var(--panel);color:var(--ink)}
+.vren svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.vc .vedit{width:calc(100% - 46px);display:inline-block;margin:0;padding:3px 6px;font-size:12px}
+.cgrid{display:grid;grid-template-columns:270px 1fr;gap:18px}
+@media (max-width:800px){.cgrid{grid-template-columns:1fr}}
+#codefiles{max-height:52vh;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:4px 8px;margin-top:8px}
+#codefiles:empty{display:none}
+#codefiles .crow{font-size:12px}
+.cnote{white-space:pre-wrap;margin:8px 0;font-size:14px;color:var(--ink)}
+.cchg{border:1px solid var(--line);border-radius:10px;padding:6px 10px;margin:8px 0}
+.cchg .crow{font-size:14px}
+.cbadge{font-size:11px;padding:1px 8px;border-radius:10px;background:var(--panel);color:var(--mute);margin-left:6px}
+.cbadge.warn{background:#5a3b12;color:#ffd9a0}
+.cwhy{font-size:12px;color:var(--mute);margin:2px 0 4px 26px}
+pre.diff{max-height:300px;overflow:auto;font-size:12px;line-height:1.4;margin:6px 0;padding:6px;white-space:pre-wrap;word-break:break-all}
+.dadd{background:rgba(70,190,110,.2)}
+.ddel{background:rgba(240,90,90,.2)}
+.dctx{color:var(--mute)}
+#autolines{font-size:14px;padding-left:22px}
+#autolines li{margin:3px 0}
+#cytracks{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin:14px 0}
+.cytrack{text-align:left;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px;cursor:pointer;color:var(--ink)}
+.cytrack:hover{border-color:var(--accent)}
+.cytrack .ct-top{display:flex;justify-content:space-between;align-items:center;font-size:28px}
+.cytrack .ct-title{font-weight:700;margin-top:8px}
+.cytrack .ct-bar{height:6px;border-radius:3px;background:var(--line);margin-top:10px;overflow:hidden}
+.cytrack .ct-bar i{display:block;height:100%;background:var(--accent)}
+.cytrack .ct-n{font-size:12px;color:var(--mute);margin-top:4px}
+.cysub{border-top:1px solid var(--line);margin-top:4px;padding-top:16px}
+.cystats{font-size:13px;color:var(--mute);margin:8px 0}
+.cybar{display:flex;align-items:center;gap:14px;margin-bottom:16px}
+.cyprog{flex:1;height:8px;border-radius:4px;background:var(--line);overflow:hidden}
+#cyprogfill{height:100%;width:0;background:var(--accent);transition:width .2s}
+.cycard h3{font:700 20px/1.3 Georgia,serif;margin:0 0 10px}
+.cycard p{line-height:1.55;margin:0 0 10px}
+.cyopt{display:block;width:100%;text-align:left;background:var(--panel);border:2px solid var(--line);border-radius:10px;padding:11px 14px;margin:7px 0;color:var(--ink);font-size:15px}
+.cyopt:hover:not(:disabled){border-color:var(--accent)}
+.cyopt:disabled{opacity:.85}
+.cyopt.right{border-color:#2e8b57;background:rgba(46,139,87,.18)}
+.cyopt.wrong{border-color:#c0392b;background:rgba(192,57,43,.18)}
+.cyfeed{margin-top:12px;padding:12px 14px;border-radius:10px;font-size:14px;line-height:1.5}
+.cyfeed.right{background:rgba(46,139,87,.15);border:1px solid #2e8b57}
+.cyfeed.wrong{background:rgba(192,57,43,.15);border:1px solid #c0392b}
+.cyrow{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
+.cyinput{font-size:16px;padding:10px 12px;border-radius:10px;border:2px solid var(--line);background:var(--bg);color:var(--ink);width:100%;max-width:280px}
+.cyinput.right{border-color:#2e8b57}.cyinput.wrong{border-color:#c0392b}
+.cyask{background:none;border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--accent);font-weight:600;font-size:13px}
+.cyask:hover{background:var(--panel)}
+.cyaskbox{margin-top:12px;border:1px dashed var(--line);border-radius:10px;padding:10px 12px}
+.cyaskbox textarea{width:100%;margin-top:6px}
+.cytxt{white-space:pre-wrap;font-size:14px;line-height:1.55;margin-top:6px;color:var(--ink)}
+.cywho{font-size:12px;color:var(--mute);margin-bottom:2px}
+.cyq .q{font-weight:600;font-size:17px;margin-bottom:12px}
 #status.ok{color:var(--mute)}
 .doc{display:flex;gap:6px;align-items:center;font-size:13px;margin-bottom:4px}
 .doc span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -671,6 +756,11 @@ dialog .btn{margin-right:6px;margin-top:8px}
   <div id="toolmenu" role="menu" hidden>
    <div class="mgroup">Create</div>
    <button role="menuitem" id="makegame"><b>Make a game</b><span>Describe it, play it, edit it live</span></button>
+   <button role="menuitem" id="codebtn"><b>Code helper</b><span>Write and edit real code files</span></button>
+   <div class="mgroup">Learn</div>
+   <button role="menuitem" id="cyberbtn"><b>Cyber Trainer</b><span>Bite-size cybersecurity lessons + subnetting drills</span></button>
+   <div class="mgroup">Automate</div>
+   <button role="menuitem" id="autobtn"><b>Computer helper</b><span>Let Atlas click and type for you</span></button>
    <div class="mgroup">Files</div>
    <button role="menuitem" id="vids"><b>Videos and images</b><span>Preview, pick and send to a folder</span></button>
    <button role="menuitem" id="convbtn"><b>Convert files</b><span>Change video and image formats</span></button>
@@ -732,7 +822,13 @@ dialog .btn{margin-right:6px;margin-top:8px}
  <div id="vview" hidden tabindex="-1" role="dialog" aria-label="Full screen viewer">
   <div id="vvbar">
    <label id="vvsel" title="Select this file (S)"><input type="checkbox" id="vvcb"><span>Select</span></label>
+   <button id="vvren" aria-label="Rename this file" title="Rename"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg></button>
    <button id="vvadd" aria-haspopup="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><path d="M12 11v6M9 14h6"/></svg><span>Add to folder</span></button>
+  </div>
+  <div id="vvrn" hidden>
+   <div class="vvph">Rename</div>
+   <div class="vvpn"><input id="vvrname" type="text" maxlength="120" aria-label="New file name"><span id="vvrnext"></span><button id="vvrnok">Save</button></div>
+   <div id="vvrnmsg"></div>
   </div>
   <div id="vvpick" hidden>
    <div class="vvph">Add to folder</div>
@@ -819,6 +915,15 @@ dialog .btn{margin-right:6px;margin-top:8px}
   <label for="vpitch" style="margin-top:8px">Pitch <span id="vpitchv"></span></label><input type="range" id="vpitch" min="0.6" max="1.6" step="0.1" value="1">
   <button class="btn ghost" id="vprev">Preview voice</button>
   <p class="hint">The voices come from your computer and browser. Chrome and Edge usually have several, including natural-sounding ones.</p></div>
+ <div class="set"><label>Ollama updates</label>
+  <label class="switch"><input type="checkbox" id="ollauto" role="switch"><span class="track"></span><span>Update Ollama automatically</span></label>
+  <div id="ollinfo" class="hint" role="status" style="margin:6px 0">Not checked yet.</div>
+  <button class="btn ghost" id="ollcheck">Check for updates</button><button class="btn ghost" id="olldl">Download latest Ollama</button>
+  <p class="hint">When this is on, Atlas checks each time it starts and installs new Ollama versions for you (Windows). On Mac and Linux it tells you when one is out, and you use the Download button. Ollama's own app can also offer updates from its tray icon.</p></div>
+ <div class="set"><label>Image and video reading</label>
+  <button class="btn ghost" id="vtbtn" style="margin:0">Test image and video reading</button>
+  <div id="vtres" role="status" style="font-size:13px;margin-top:8px"></div>
+  <p class="hint">Checks that a model on your computer can really see pictures and video clips. If it fails, the message says what to install.</p></div>
  <div class="set"><label>App icon</label>
   <div style="display:flex;gap:12px;align-items:center">
    <img id="icprev" width="64" height="64" alt="Current app icon" style="background:repeating-conic-gradient(#7a7a7a 0 25%,#5c5c5c 0 50%) 0 0/16px 16px">
@@ -857,6 +962,62 @@ dialog .btn{margin-right:6px;margin-top:8px}
  <div id="cmsg" role="status" style="margin:8px 0"></div>
  <button class="btn" id="cgo">Convert ticked</button><button class="btn ghost" id="cclose">Close</button>
 </dialog>
+<dialog id="codedlg" style="max-width:1100px"><h2>Code helper</h2>
+ <p class="hint">Pick a project folder, tick the files the AI should read, say what you want, and review every change before anything is written. Nothing is run. You can undo the last apply.</p>
+ <div class="cgrid">
+  <div>
+   <label for="codefolder">Project folder</label><input id="codefolder" placeholder="~/projects/my-app">
+   <button class="btn" id="codeopen">Open project</button>
+   <div id="codefiles" role="group" aria-label="Project files"></div>
+  </div>
+  <div>
+   <label for="codereq">What do you want done?</label>
+   <textarea id="codereq" rows="4" placeholder="e.g. Add a function that ... / Fix the bug in ... / Create a README for this project"></textarea>
+   <div id="codeimgs" style="display:flex;gap:6px;margin:6px 0"></div>
+   <button class="btn" id="codego">Ask</button><button class="btn ghost" id="codeimg">Attach image</button><input type="file" id="codeimgfile" accept="image/*" hidden><button class="btn ghost" id="codeundo">Undo last apply</button><button class="btn ghost" id="codeclose">Close</button>
+   <div id="codemsg" role="status" style="margin:8px 0;font-size:13px"></div>
+   <div id="codeout"></div>
+   <button class="btn" id="codeapply" hidden>Apply ticked changes</button>
+  </div>
+ </div>
+</dialog>
+<dialog id="autodlg" style="max-width:760px"><h2>Computer helper</h2>
+ <p class="hint">Atlas can move your mouse, click, scroll, type and press keys for you. You always see the steps first, and nothing runs until you click Run. To stop at any time, click Stop or push the mouse into the top-left corner of the screen. On a Mac you may need to allow Accessibility for Atlas in System Settings. Windows blocks control of programs running as administrator.</p>
+ <div id="autoinfo" class="hint" role="status"></div>
+ <label for="autotask" style="margin-top:8px">What should it do?</label>
+ <textarea id="autotask" rows="3" placeholder="e.g. Scroll down slowly, 10 times, waiting 2 seconds between each"></textarea>
+ <label style="margin-top:6px"><input type="checkbox" id="autoshot" style="width:auto"> Let the AI look at my screen first (needs a vision model, experimental)</label>
+ <button class="btn" id="automake">Make steps</button><button class="btn ghost" id="autopos">Where is my mouse?</button>
+ <div id="autoposout" class="hint" role="status"></div>
+ <div id="autoplan" hidden>
+  <strong id="autosum"></strong>
+  <ol id="autolines"></ol>
+  <details><summary>Advanced: edit the steps</summary><textarea id="autojson" rows="8" spellcheck="false" style="font:12px ui-monospace,Consolas,monospace"></textarea><button class="btn ghost" id="autocheck">Check my edits</button></details>
+  <label for="autodelay" style="margin-top:8px">Start after</label><select id="autodelay"><option value="5">5 seconds</option><option value="10" selected>10 seconds</option><option value="20">20 seconds</option></select>
+  <button class="btn" id="autorun">Run these steps</button>
+ </div>
+ <div id="autostat" role="status" style="margin:10px 0;font-weight:600"></div>
+ <button class="btn" id="autostop" hidden style="background:#c0392b;color:#fff">Stop</button><button class="btn ghost" id="autoclose">Close</button>
+</dialog>
+<dialog id="cyberdlg" style="max-width:900px"><h2>Cyber Trainer</h2>
+ <div id="cyhome">
+  <p class="hint">Short lessons with instant feedback, like a language app but for cybersecurity. Tap Ask Atlas any time you're stuck on a question &mdash; it knows exactly what you're looking at.</p>
+  <div id="cytracks"></div>
+  <div class="cysub">
+   <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+    <div><b>Subnetting Drill</b><div class="hint" style="margin:2px 0 0">Unlimited random practice. Good for cramming before your final.</div></div>
+    <select id="cydiff"><option value="easy">Easy (/24&ndash;/28)</option><option value="med" selected>Medium (/16&ndash;/30)</option><option value="hard">Hard (mixed, with VLSM)</option></select>
+   </div>
+   <div class="cystats" id="cystats"></div>
+   <button class="btn" id="cydrill">Start drilling</button>
+  </div>
+ </div>
+ <div id="cyplay" hidden>
+  <div class="cybar"><button class="btn ghost" id="cyback">&larr; Back</button><div class="cyprog"><div id="cyprogfill"></div></div><div id="cyscore" class="hint"></div></div>
+  <div id="cycard"></div>
+ </div>
+ <button class="btn ghost" id="cyclose" style="margin-top:14px">Close</button>
+</dialog>
 <dialog id="task"><h2>Organize a folder</h2>
  <p>Sorts files into folders by type, tucks existing folders into one called Folders, and moves old or probably useless files (old installers, empty files, duplicate downloads) into Review before deleting. Nothing is deleted, nothing moves until you approve the list, and you can undo it.</p>
  <label for="folder">Folder</label><input id="folder" value="~/Downloads">
@@ -888,7 +1049,7 @@ function md(t){
  }).join("");
 }
 function cur(){return S.chats.find(c=>c.id===S.cur)}
-const fixErr=m=>/unknown model architecture|mllama/i.test(m||"")?"The model you picked needs a newer version of Ollama than the one installed. Update Ollama (it is free and keeps your downloaded models): get the latest from ollama.com. Or choose a different model that can see images, for example run  ollama pull gemma3:4b  in a terminal.":m;
+const fixErr=m=>/unknown model architecture|mllama/i.test(m||"")?"The model you picked needs a newer version of Ollama than the one installed. Update Ollama (it is free and keeps your downloaded models): open Settings and click Download latest Ollama, or turn on Update Ollama automatically. Or choose a different model that can see images, for example run  ollama pull gemma3:4b  in a terminal.":m;
 function status(t,ok){t=fixErr(t);$("status").textContent=t||"";$("status").classList.toggle("ok",!!ok);document.querySelectorAll(".smsg").forEach(e=>{e.textContent=t||""})}
 function chip(){$("modelchip").textContent=(S.model||"No model")+" \u00b7 "+(S.mode==="game"?"Game helper":"Chat")}
 function save(){
@@ -1085,7 +1246,7 @@ async function mkSend(text,auto){
 }
 async function gen(messages,onText,opts){
  ctl=new AbortController();
- const r=await fetch("/api/chat",{method:"POST",headers:H,signal:ctl.signal,body:JSON.stringify({model:S.model,stream:true,keep_alive:"30m",options:Object.assign({num_ctx:8192},opts),messages})});
+ const r=await fetch("/api/chat",{method:"POST",headers:H,signal:ctl.signal,body:JSON.stringify({model:(opts&&opts.model)||S.model,stream:true,keep_alive:"30m",options:Object.assign({num_ctx:8192},opts,{model:undefined}),messages})});
  if(!r.ok){const j=await r.json().catch(()=>({}));throw new Error(j.error||"Ollama returned error "+r.status)}
  const rd=r.body.getReader(),dec=new TextDecoder();let buf="",out="";
  while(true){
@@ -1195,8 +1356,39 @@ function vRender(){
   const wrap=document.createElement("div"),ex=document.createElement("button");
   wrap.className="vwrap";ex.className="vexp";ex.title="Full screen";ex.setAttribute("aria-label","Full screen: "+v.name);ex.innerHTML=ICON.expand;ex.onclick=()=>vvOpen(idx);
   const grip=document.createElement("div");grip.className="vgrip";grip.title="Drag to a folder";grip.innerHTML=ICON.grip;
-  wrap.append(vid,ex,grip);c.append(wrap,lab,ai);g.append(c);io.observe(vid);
+  const row=document.createElement("div"),rn=document.createElement("button");
+  row.className="vname";rn.className="vren";rn.title="Rename";rn.setAttribute("aria-label","Rename "+v.name);rn.innerHTML=ICON.pencil;rn.onclick=()=>vRename(v,t);
+  row.append(lab,rn);wrap.append(vid,ex,grip);c.append(wrap,row,ai);g.append(c);io.observe(vid);
  });
+}
+function unloadPreview(v){const x=v.el&&v.el.querySelector("video");if(x){x.pause();x.removeAttribute("src");x.load()}}
+async function doRename(v,newBase){
+ unloadPreview(v);await new Promise(r=>setTimeout(r,150));  // let go of the file first
+ const j=await api("/api/renamefile",{path:v.path,new:newBase});
+ v.name=j.name;v.path=j.path;vRender();
+ vsay('Renamed to "'+j.name+'". Undo last run puts the old name back.');
+}
+function vRename(v,t){
+ const dot=v.name.lastIndexOf("."),ext=v.name.slice(dot),base=v.name.slice(0,dot);
+ const i=document.createElement("input"),x=document.createElement("span");
+ i.type="text";i.className="vedit";i.value=base;i.maxLength=120;i.setAttribute("aria-label","New name for "+v.name);x.textContent=ext;
+ t.textContent="";t.append(i,x);i.focus();i.select();
+ i.addEventListener("mousedown",()=>{if(v.el)v.el.draggable=false});
+ let done=false;
+ const finish=async save=>{
+  if(done)return;done=true;
+  const nb=i.value.trim();
+  if(!save||!nb||nb===base){t.textContent=v.name+" ("+v.mb+" MB)";return}
+  try{await doRename(v,nb)}catch(e){vsay(e.message);t.textContent=v.name+" ("+v.mb+" MB)"}
+ };
+ i.onkeydown=e=>{if(e.key==="Enter"){e.preventDefault();finish(true)}else if(e.key==="Escape"){e.preventDefault();e.stopPropagation();finish(false)}};
+ i.onblur=()=>finish(true);
+}
+async function vvRename(){
+ const v=VF[VI];if(!v)return;
+ const nb=$("vvrname").value.trim();if(!nb){$("vvrnmsg").textContent="Type a name first.";return}
+ try{vvStop();await doRename(v,nb);$("vvrn").hidden=true;vvShow(VI)}
+ catch(e){$("vvrnmsg").textContent=e.message;vvShow(VI)}
 }
 let VFD=[],VUP="",VCUR="",FSEL=new Set(),FNEW=false,dragFiles=[];
 function vmark(v){if(v.cb)v.cb.checked=!!v.sel;if(v.el)v.el.classList.toggle("sel",!!v.sel)}
@@ -1283,7 +1475,7 @@ let VI=-1;
 function vvStop(){const st=$("vvstage");st.querySelectorAll("video").forEach(x=>{x.pause();x.removeAttribute("src");x.load()});st.innerHTML=""}
 function vvShow(i){
  if(!VF.length)return;
- $("vvpick").hidden=true;
+ $("vvpick").hidden=true;$("vvrn").hidden=true;
  VI=(i+VF.length)%VF.length;
  const v=VF[VI],img=IMGRX.test(v.name);vvStop();
  const el=document.createElement(img?"img":"video");el.src=vsrc(v);
@@ -1352,6 +1544,9 @@ function frames(src,n){
   v.onerror=()=>{clearTimeout(to);rej(new Error("Your browser can't open that video (some codecs like HEVC don't work). MP4 or WebM usually do."))};
   v.onloadedmetadata=async()=>{
    clearTimeout(to);
+   if(!isFinite(v.duration)){  // recorded clips often lack a length, so make the browser work it out
+    await new Promise(r=>{v.ontimeupdate=()=>{v.ontimeupdate=null;r()};v.currentTime=1e7;setTimeout(r,3000)});
+   }
    if(!isFinite(v.duration)||!v.videoWidth){rej(new Error("Couldn't read that video."));return}
    const out=[],cv=document.createElement("canvas"),sc=Math.min(1,768/Math.max(v.videoWidth,v.videoHeight));
    cv.width=v.videoWidth*sc;cv.height=v.videoHeight*sc;
@@ -1427,6 +1622,7 @@ ICON.folder='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M22 19a2 2 0 0
 ICON.folderplus='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><path d="M12 11v6M9 14h6"/></svg>';
 ICON.dots='<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="12" cy="19" r="1.7"/></svg>';
 ICON.grip='<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg>';
+ICON.pencil='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>';
 function abtn(svg,label,fn){
  const b=document.createElement("button");
  b.className="abtn";b.innerHTML=svg;b.title=label;b.setAttribute("aria-label",label);b.onclick=fn;return b;
@@ -1465,6 +1661,342 @@ function fillVoices(){
   const o=document.createElement("option");o.value=v.name;o.textContent=v.name+" ("+v.lang+")";sel.append(o);
  });
  sel.value=S.voice||"";
+}
+
+function ollText(j){
+ if(!j.latest&&!j.current)return "Couldn't check. Is Ollama running, and are you online?";
+ const cur=j.current?"Installed "+j.current:"Ollama isn't running",lat=j.latest?" \u00b7 Latest "+j.latest:" \u00b7 couldn't check the latest version";
+ return cur+lat+(j.newer?" \u00b7 an update is available":(j.current&&j.latest?" \u00b7 up to date":""));
+}
+async function ollPoll(){
+ try{
+  const u=(await api("/api/ollama",{action:"status"})).update;
+  const t=u.state==="downloading"?"Updating Ollama: downloading "+u.pct+"%":u.state==="installing"?"Updating Ollama: installing\u2026 chat may pause for a moment":(u.state==="done"||u.state==="error")?u.msg:"";
+  if(t)$("ollinfo").textContent=t;
+  if(u.state==="downloading"||u.state==="installing"){status(t,true);setTimeout(ollPoll,2500)}
+  else if(u.state==="done"){status(t,true);setTimeout(()=>ollCheck(false),1500)}
+  else if(u.state==="error")status(u.msg);
+ }catch(e){}
+}
+async function ollCheck(auto){
+ try{
+  $("ollinfo").textContent="Checking\u2026";
+  const j=await api("/api/ollama",{action:"check"});$("ollinfo").textContent=ollText(j);
+  if(j.update&&(j.update.state==="downloading"||j.update.state==="installing")){ollPoll();return j}
+  if(j.newer&&auto){
+   if(j.os==="windows"){await api("/api/ollama",{action:"update"});ollPoll()}
+   else status("Ollama "+j.latest+" is available. Open Settings and click Download latest Ollama.",true);
+  }
+  return j;
+ }catch(e){$("ollinfo").textContent=e.message}
+}
+// ---------- code helper ----------
+const CODESYS="You are an expert software engineer working on a real project on the user's computer. Be brief. When you create or change files, write EACH file in exactly this format, with nothing else inside the block:\nFILE: relative/path/to/file.ext\n```\n<the COMPLETE new contents of the file>\n```\nAlways give the whole file, never fragments or '...'. Use paths relative to the project folder. Only touch files you need to. Before the files, write one or two short sentences about what you did. If the request is only a question, answer in plain prose with no FILE blocks.";
+let CODEF=[],CODEIMGS=[],CODECHG=[],busyCode=false;
+function codesay(t){$("codemsg").textContent=fixErr(t)||""}
+async function codeOpen(final){
+ try{
+  codesay("Loading\u2026");
+  const j=await api("/api/code",{action:"list",folder:$("codefolder").value});CODEF=j.files;
+  const box=$("codefiles");box.innerHTML="";
+  CODEF.forEach(f=>{const lab=document.createElement("label"),cb=document.createElement("input"),t=document.createElement("span");lab.className="crow";cb.type="checkbox";cb.dataset.path=f.path;t.textContent=f.path+" ("+(f.kb?f.kb+" KB":"under 1 KB")+")";lab.append(cb,t);box.append(lab)});
+  codesay(final||(CODEF.length?CODEF.length+" files"+(j.more?" (showing the first 400)":"")+". Tick the ones the AI should read.":"No text files found in that folder."));
+ }catch(e){codesay(e.message)}
+}
+function diffLines(a,b){
+ const A=a.split("\n"),B=b.split("\n");
+ if(A.length*B.length>4e6)return A.map(l=>["-",l]).concat(B.map(l=>["+",l]));
+ const dp=Array.from({length:A.length+1},()=>new Uint16Array(B.length+1));
+ for(let i=A.length-1;i>=0;i--)for(let j=B.length-1;j>=0;j--)dp[i][j]=A[i]===B[j]?dp[i+1][j+1]+1:Math.max(dp[i+1][j],dp[i][j+1]);
+ const out=[];let i=0,j=0;
+ while(i<A.length&&j<B.length){if(A[i]===B[j]){out.push([" ",A[i]]);i++;j++}else if(dp[i+1][j]>=dp[i][j+1])out.push(["-",A[i++]]);else out.push(["+",B[j++]])}
+ while(i<A.length)out.push(["-",A[i++]]);while(j<B.length)out.push(["+",B[j++]]);
+ return out;
+}
+function diffHtml(oldT,newT,isNew){
+ const rows=isNew?newT.split("\n").map(l=>["+",l]):diffLines(oldT,newT),keep=new Array(rows.length).fill(false);let add=0,del=0,html="",skip=0;
+ rows.forEach((r,i)=>{if(r[0]!==" "){for(let k=Math.max(0,i-2);k<=Math.min(rows.length-1,i+2);k++)keep[k]=true;if(r[0]==="+")add++;else del++}});
+ const gap=()=>{if(skip){html+='<div class="dctx">\u2026 '+skip+" unchanged line"+(skip>1?"s":"")+" \u2026</div>";skip=0}};
+ rows.forEach((r,i)=>{if(!keep[i]){skip++;return}gap();html+='<div class="'+(r[0]==="+"?"dadd":r[0]==="-"?"ddel":"dctx")+'">'+(r[0]===" "?"  ":r[0]+" ")+esc(r[1])+"</div>"});
+ gap();return {html,add,del};
+}
+function codeShow(out,old,cut,paths){
+ const re=/(?:^|\n)[ \t*]*FILE:\s*([^\n]+)\n```[^\n]*\n([\s\S]*?)\n```/g;let m;CODECHG=[];
+ while((m=re.exec(out)))CODECHG.push({path:m[1].trim().replace(/^[`'"*]+|[`'"*]+$/g,"").replace(/\\/g,"/"),content:m[2]+"\n"});
+ let note=out.replace(re,"").trim();
+ if(!CODECHG.length&&paths.length===1){const f=out.match(/```[^\n]*\n([\s\S]*?)\n```/);if(f){CODECHG.push({path:paths[0],content:f[1]+"\n"});note=out.replace(f[0],"").trim()}}
+ const box=$("codeout");box.innerHTML="";
+ if(note){const d=document.createElement("div");d.className="cnote";d.textContent=note;box.append(d)}
+ let any=false;
+ CODECHG.forEach((c,i)=>{
+  c.existing=c.path in old;
+  let why="";
+  if(cut.has(c.path))why="The AI only saw part of this file, so rewriting it could lose the rest.";
+  else if(!c.existing&&CODEF.some(f=>f.path===c.path))why="This file already exists but wasn't ticked, so the AI never saw it.";
+  const d=document.createElement("div"),lab=document.createElement("label"),cb=document.createElement("input"),b=document.createElement("b"),bd=document.createElement("span");
+  d.className="cchg";lab.className="crow";cb.type="checkbox";cb.dataset.i=i;cb.checked=!why;cb.disabled=!!why;
+  b.textContent=c.path;bd.className="cbadge";bd.textContent=why?"blocked":c.existing?"changed":"new file";
+  lab.append(cb,b,bd);d.append(lab);
+  if(why){const w=document.createElement("div");w.className="cwhy";w.textContent=why;d.append(w)}
+  else{
+   if(/(\.\.\.|\u2026)\s*(rest|existing|unchanged|same|previous)|^\s*(\/\/|#)\s*\.\.\./im.test(c.content)){const w=document.createElement("div");w.className="cwhy";w.textContent="This may be incomplete (it contains '...'). Check the changes before applying.";d.append(w);bd.classList.add("warn")}
+   const df=diffHtml(old[c.path]||"",c.content,!c.existing),det=document.createElement("details"),sm=document.createElement("summary"),pre=document.createElement("pre");
+   sm.textContent="Show changes (+"+df.add+" \u2212"+df.del+")";pre.className="diff";pre.innerHTML=df.html;det.append(sm,pre);d.append(det);any=true;
+  }
+  box.append(d);
+ });
+ $("codeapply").hidden=!any;
+ if(!CODECHG.length&&!note)codesay("The AI didn't return anything.");
+}
+async function codeAsk(){
+ if(busyCode){if(ctl)ctl.abort();return}
+ const req=$("codereq").value.trim();if(!req){codesay("Say what you want done first.");return}
+ const paths=[...$("codefiles").querySelectorAll("input:checked")].map(x=>x.dataset.path);
+ try{
+  busyCode=true;$("codego").textContent="Stop";$("codeout").innerHTML="";$("codeapply").hidden=true;codesay("Reading files\u2026");
+  const files=paths.length?(await api("/api/code",{action:"read",folder:$("codefolder").value,paths})).files:{};
+  let budget=36000,ctx="";const cut=new Set(),old={};
+  for(const p of paths){
+   const f=files[p];if(!f)continue;
+   let t=f.text;old[p]=f.text;
+   if(f.cut||t.length>budget){t=t.slice(0,Math.max(0,budget));cut.add(p)}
+   budget-=t.length;
+   ctx+="=== "+p+(cut.has(p)?" (shortened, so do not rewrite this file)":"")+" ===\n```\n"+t+"\n```\n\n";
+  }
+  const user="Project files:\n"+CODEF.slice(0,200).map(f=>f.path).join("\n")+"\n\n"+(ctx?"Files you can read:\n"+ctx:"(No files were ticked, so you cannot see any file contents.)\n\n")+"Request: "+req;
+  const img=CODEIMGS.length>0,model=img?visionModel():mkModel();if(!model)throw new Error(NOVISION);
+  codesay("Writing with "+model+"\u2026");
+  const out=await gen([{role:"system",content:CODESYS},{role:"user",content:user,images:img?CODEIMGS:undefined}],t=>codesay("Writing with "+model+"\u2026 "+t.length+" characters"),{num_ctx:16384,temperature:0.2,model});
+  codesay("Review the changes below. Nothing has been written yet.");codeShow(out,old,cut,paths);
+ }catch(e){codesay(e.name==="AbortError"?"Stopped.":e.message)}
+ busyCode=false;$("codego").textContent="Ask";
+}
+function renderCodeImgs(){
+ const b=$("codeimgs");b.innerHTML="";
+ CODEIMGS.forEach((g,i)=>{const im=document.createElement("img");im.src="data:image/jpeg;base64,"+g;im.title="Click to remove";im.style.cssText="height:44px;border-radius:6px;cursor:pointer";im.onclick=()=>{CODEIMGS.splice(i,1);renderCodeImgs()};b.append(im)});
+}
+
+// ---------- computer helper ----------
+let AUTOPLAN=null,autoT=null;
+const autoSys=(w,h,shot)=>"You turn a request into mouse and keyboard steps for a computer. "+(shot?"You are given a screenshot of the screen ("+w+" by "+h+" pixels). Every x and y you write must be a pixel position in that screenshot.":"The screen is "+w+" by "+h+" pixels, but you cannot see it.")+" Reply with ONLY one JSON object and no other text: {\"summary\":\"short description\",\"repeat\":1,\"steps\":[...]}. Allowed steps: {\"op\":\"move\",\"x\":0,\"y\":0} {\"op\":\"click\",\"x\":0,\"y\":0} (leave out x and y to click where the mouse already is) {\"op\":\"double_click\"} {\"op\":\"right_click\"} {\"op\":\"drag\",\"x\":0,\"y\":0,\"x2\":0,\"y2\":0} {\"op\":\"scroll\",\"amount\":-300} (positive scrolls up, negative scrolls down, about 100 per notch) {\"op\":\"type\",\"text\":\"hello\"} {\"op\":\"press\",\"key\":\"enter\"} {\"op\":\"hotkey\",\"keys\":[\"ctrl\",\"s\"]} {\"op\":\"wait\",\"seconds\":2}. Prefer keyboard shortcuts over clicking. Never invent a position for something you cannot see: if the task needs a position you were not given, reply {\"error\":\"Tell me the x and y position of ...\"} instead. Use \"repeat\" (up to 100) to repeat the whole list. Keep it under 40 steps.";
+async function autoInfo(){try{const j=await api("/api/auto",{action:"info"});$("autoinfo").textContent="Ready. Your screen is "+j.w+" by "+j.h+" pixels."}catch(e){$("autoinfo").textContent=e.message}}
+function openAuto(){$("autodlg").showModal();autoInfo()}
+async function autoShow(plan){
+ const j=await api("/api/auto",{action:"validate",plan});AUTOPLAN=j.plan;
+ $("autosum").textContent=(j.plan.summary||"Steps")+(j.plan.repeat>1?" (all repeated "+j.plan.repeat+" times)":"");
+ $("autolines").innerHTML=j.lines.map(l=>"<li>"+esc(l)+"</li>").join("");
+ $("autojson").value=JSON.stringify(j.plan,null,1);$("autoplan").hidden=false;
+}
+async function autoPoll(){
+ try{
+  const j=await api("/api/auto",{action:"status"});$("autostat").textContent=j.msg||"";
+  if(j.state==="countdown"||j.state==="running")autoT=setTimeout(autoPoll,500);
+  else{$("autostop").hidden=true;$("autorun").disabled=false}
+ }catch(e){}
+}
+
+// ---------- test that images and videos can be read ----------
+function testVideo(){
+ return new Promise((res,rej)=>{
+  const cv=document.createElement("canvas");cv.width=320;cv.height=180;const x=cv.getContext("2d");
+  if(!window.MediaRecorder||!cv.captureStream)return rej(new Error("This browser can't make the test video."));
+  const rec=new MediaRecorder(cv.captureStream(15)),chunks=[];
+  rec.ondataavailable=e=>chunks.push(e.data);rec.onstop=()=>res(new Blob(chunks,{type:"video/webm"}));
+  const t0=performance.now();
+  const draw=()=>{const t=performance.now()-t0,go=t<1000;x.fillStyle=go?"#fff":"#222";x.fillRect(0,0,320,180);x.fillStyle=go?"#000":"#fff";x.font="bold 80px sans-serif";x.fillText(go?"GO":"STOP",go?100:40,115);if(t<2000)requestAnimationFrame(draw);else rec.stop()};
+  rec.start();draw();
+ });
+}
+async function visionTest(){
+ const out=$("vtres");out.innerHTML="";$("vtbtn").disabled=true;
+ const add=(k,t)=>{const d=document.createElement("div");d.textContent=({ok:"\u2713 ",bad:"\u2717 ",info:"\u2022 "}[k])+t;out.append(d)};
+ try{
+  const vm=visionModel();
+  if(!vm){add("bad",NOVISION);return}
+  add("info","Models that can see: "+VISION.join(", ")+". Testing with "+vm+". This can take a minute or two.");
+  try{
+   const cv=document.createElement("canvas");cv.width=480;cv.height=270;const x=cv.getContext("2d");
+   x.fillStyle="#fff";x.fillRect(0,0,480,270);x.fillStyle="#000";x.font="bold 90px sans-serif";x.fillText("ATLAS 42",40,130);x.fillStyle="#d22";x.beginPath();x.arc(240,205,42,0,7);x.fill();
+   const a=await ask([{role:"user",content:"What text is written in this picture, and what color is the circle? Answer in one short sentence.",images:[cv.toDataURL("image/jpeg",.9).split(",")[1]]}],{num_predict:60,num_ctx:4096},vm);
+   add(/42|atlas/i.test(a)?"ok":"bad",(/42|atlas/i.test(a)?"Images work. ":"It answered but didn't read the text right. ")+"It said: "+a.trim());
+  }catch(e){add("bad","Images: "+fixErr(e.message));return}
+  try{
+   add("info","Making a 2 second test video\u2026");
+   const fr=await frames(URL.createObjectURL(await testVideo()),2),got=[];
+   for(const f of fr)got.push(await ask([{role:"user",content:"What single word is written in this picture? Reply with only that word.",images:[f.b64]}],{num_predict:10,num_ctx:4096},vm));
+   const ok=got.length===2&&/go/i.test(got[0])&&/stop/i.test(got[1]);
+   add(ok?"ok":"bad",(ok?"Videos work. ":"Frames were taken, but they weren't read right (expected GO then STOP). ")+"It saw: "+got.map(g=>'"'+g.trim()+'"').join(" then "));
+  }catch(e){add("bad","Videos: "+fixErr(e.message))}
+ }finally{$("vtbtn").disabled=false}
+}
+
+// ======================= Cyber Trainer =======================
+function ipInt(s){const m=(s||"").trim().match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);if(!m)return null;const o=m.slice(1).map(Number);if(o.some(x=>x>255))return null;return ((o[0]<<24)|(o[1]<<16)|(o[2]<<8)|o[3])>>>0}
+function intIp(n){return [(n>>>24)&255,(n>>>16)&255,(n>>>8)&255,n&255].join(".")}
+function cidrMask(c){return c===0?0:(0xFFFFFFFF<<(32-c))>>>0}
+function maskCidr(s){const n=ipInt(s);if(n===null)return null;let c=0,seenZero=false;for(let i=31;i>=0;i--){const b=(n>>>i)&1;if(b){if(seenZero)return null;c++}else seenZero=true}return c}
+function netCalc(ip,cidr){
+ const mask=cidrMask(cidr),net=(ip&mask)>>>0,bc=(net|(~mask>>>0))>>>0;
+ const hosts=cidr>=31?(cidr===32?1:2):Math.pow(2,32-cidr)-2;
+ const first=cidr>=31?net:(net+1)>>>0,last=cidr>=31?bc:(bc-1)>>>0;
+ return {mask,net,bc,hosts,first,last};
+}
+const CYTRACKS=[
+ {id:"basics",title:"Cybersecurity Basics",emoji:"\u{1f6e1}\ufe0f",steps:[
+  {t:"info",title:"The CIA Triad",body:"Almost everything in security protects one of three things: Confidentiality (only the right people can read it), Integrity (the data hasn't been tampered with), and Availability (it's there when you need it). When you hear about an attack, ask which of these three it broke."},
+  {t:"quiz",q:"A website gets knocked offline by a flood of fake traffic (a DoS attack). Which part of the CIA triad does this attack on?",choices:["Confidentiality","Integrity","Availability"],a:2,why:"The data wasn't read or changed \u2014 it just wasn't reachable. That's an availability attack."},
+  {t:"quiz",q:"An attacker secretly changes the amount in a bank transfer before it's processed. Which part of the triad is violated?",choices:["Confidentiality","Integrity","Availability"],a:1,why:"The data was altered without authorization \u2014 that's an integrity violation, even though nothing was 'stolen'."},
+  {t:"info",title:"Threat, Vulnerability, Risk",body:"These three words get mixed up constantly, including on exams. A vulnerability is a weakness (an unpatched server). A threat is something that could exploit it (an attacker, or even a flood). Risk is the likelihood times the impact if that threat hits that vulnerability. No vulnerability, no risk \u2014 even with a threat around."},
+  {t:"quiz",q:"An unpatched piece of software with a known flaw is best described as a:",choices:["Threat","Vulnerability","Risk","Exploit"],a:1,why:"The weakness itself is the vulnerability. The thing that could take advantage of it is the threat."},
+  {t:"info",title:"Authentication factors",body:"Authentication proves who you are. The three classic factors: something you know (password), something you have (phone, token), something you are (fingerprint). Multi-factor authentication (MFA) combines at least two different factors \u2014 two passwords is NOT MFA, because they're the same factor type."},
+  {t:"quiz",q:"Logging in with a password plus a code from an authenticator app uses which two factors?",choices:["Something you know + something you know","Something you know + something you have","Something you have + something you are","All three factors"],a:1,why:"Password = know. Code from an app on your phone = have. That's true MFA."},
+  {t:"info",title:"Common malware types",body:"Virus: attaches to a host file and needs a human to run it. Worm: spreads on its own across a network, no human needed. Trojan: disguises itself as something legitimate. Ransomware: encrypts your files and demands payment. Spyware: quietly collects information."},
+  {t:"quiz",q:"Malware that spreads across a network by itself, without a user opening anything, is best classified as a:",choices:["Virus","Worm","Trojan","Adware"],a:1,why:"Self-propagation with no human action is the defining trait of a worm."},
+  {t:"info",title:"Symmetric vs asymmetric encryption",body:"Symmetric encryption uses ONE shared key to both lock and unlock data \u2014 fast, but you have to get the key to the other person safely (like AES). Asymmetric uses a key PAIR: a public key anyone can use to encrypt, and a private key only you hold to decrypt (like RSA). HTTPS actually uses both: asymmetric to exchange a key, then symmetric for the actual data."},
+  {t:"quiz",q:"Which type of encryption uses a public key and a private key?",choices:["Symmetric","Asymmetric","Hashing","Steganography"],a:1,why:"A key pair \u2014 public to encrypt, private to decrypt \u2014 is the definition of asymmetric encryption."}
+ ]},
+ {id:"network",title:"Networking & Subnetting",emoji:"\ud83d\udd0c",steps:[
+  {t:"info",title:"IP addresses and octets",body:"An IPv4 address like 192.168.1.10 is 32 bits, written as four 8-bit \"octets\" (0\u2013255) separated by dots. In binary, each octet is 8 ones and zeros: 192 = 11000000, 1 = 00000001. Subnetting is really just binary math wearing a decimal costume."},
+  {t:"quiz",q:"What is 192 in binary?",choices:["11000000","11100000","10100000","11001000"],a:0,why:"128+64 = 192, so the first two bits are 1 and the rest are 0: 11000000."},
+  {t:"info",title:"What a subnet mask actually does",body:"A subnet mask is a run of 1s followed by a run of 0s, like 255.255.255.0 (24 ones). The 1s mark the NETWORK part of the address; the 0s mark the HOST part. CIDR notation (/24) is just a shorthand for \"24 ones in the mask\"."},
+  {t:"quiz",q:"A /26 subnet mask has how many bits set to 1?",choices:["24","26","6","32"],a:1,why:"The number after the slash IS the count of 1-bits in the mask. /26 means 26 ones, 6 zeros."},
+  {t:"info",title:"Finding the network address",body:"To find the network address, line the IP up with the mask in binary and AND them together (1 AND 1 = 1, anything AND 0 = 0). In practice: for a mask that lands on a whole octet (/8, /16, /24), just zero out the host octets. For masks in between, you need the 'magic number' trick below."},
+  {t:"info",title:"The magic number trick",body:"For a mask inside one octet, subtract the mask's last non-255 value from 256 \u2014 that's your 'block size'. Example: /27 mask is 255.255.255.224. 256-224=32. Subnets jump by 32 in that octet: 0, 32, 64, 96, 128, 160, 192, 224. Find which block your address falls into \u2014 that's your network address."},
+  {t:"quiz",q:"192.168.1.77 /27 \u2014 the block size is 32 (0,32,64,96...). Which block does .77 fall into, and what's the network address?",choices:["192.168.1.64","192.168.1.32","192.168.1.96","192.168.1.0"],a:0,why:"77 is between 64 and 96, so it falls in the 64 block. Network address = 192.168.1.64."},
+  {t:"quiz",q:"Same subnet, 192.168.1.64 /27. What is the broadcast address?",choices:["192.168.1.95","192.168.1.127","192.168.1.63","192.168.1.255"],a:0,why:"The broadcast is one less than the START of the NEXT block. Next block starts at 96, so broadcast = 96-1 = 95."},
+  {t:"info",title:"Usable hosts",body:"Every subnet loses exactly 2 addresses: the network address (identifies the subnet itself) and the broadcast address (sends to everyone on it). Formula: 2^(host bits) - 2. A /27 has 5 host bits (32-27), so 2^5-2 = 30 usable hosts."},
+  {t:"quiz",q:"How many usable host addresses are in a /29 network?",choices:["8","6","4","2"],a:1,why:"/29 leaves 3 host bits (32-29=3). 2^3=8, minus the network and broadcast = 6 usable."},
+  {t:"info",title:"Picking a mask from a host requirement",body:"If you're told 'this department needs 20 hosts', find the smallest power of 2, minus 2, that's at least 20. 2^5-2=30 \u2265 20 works; 2^4-2=14 is too small. 5 host bits means a /27 (32-5)."},
+  {t:"quiz",q:"A subnet needs to support 50 hosts. What's the smallest subnet (as a CIDR) that fits?",choices:["/25","/26","/27","/24"],a:1,why:"/26 gives 6 host bits: 2^6-2=62 \u2265 50. /27 only gives 30, too small."}
+ ]},
+ {id:"tools",title:"Tools of the Trade",emoji:"\ud83e\uddf0",steps:[
+  {t:"info",title:"Before anything else: get authorization",body:"Every tool below is legal to learn and legal to use \u2014 ON SYSTEMS YOU OWN OR HAVE WRITTEN PERMISSION TO TEST. Running these against someone else's network without permission is a crime in most countries (in the US, the Computer Fraud and Abuse Act), even if you don't cause any damage. In the workforce this permission is called a 'scope' or 'rules of engagement' document, and you stay inside it."},
+  {t:"quiz",q:"You're curious about a classmate's Wi-Fi security. What should you do first?",choices:["Scan it quietly, you're just learning","Ask for their written permission first, or use your own lab instead","It's fine since you won't change anything","Only illegal if you get caught"],a:1,why:"Scanning someone else's network without permission is unauthorized access, even just to look. Use your own gear or a permitted lab (like a CTF or Hack The Box) instead."},
+  {t:"info",title:"Nmap \u2014 the network mapper",body:"Nmap finds what's alive on a network and what's running on it. `nmap -sV 192.168.1.0/24` scans a whole subnet and tries to identify service versions on any open ports it finds. It's usually the very first tool run in a penetration test, to build a map of the target before anything else happens."},
+  {t:"quiz",q:"What does Nmap's -sV flag do?",choices:["Scans very fast, skipping checks","Tries to detect the version of each service it finds open","Saves the output to a file","Scans only well-known ports"],a:1,why:"-sV is version detection \u2014 it fingerprints what's actually running on each open port, like 'Apache 2.4.41', not just that the port is open."},
+  {t:"info",title:"Wireshark \u2014 seeing the traffic itself",body:"Wireshark captures and displays every packet crossing a network interface. You use filters to cut through the noise, like `http.request` to show only web requests, or `ip.addr==10.0.0.5` to focus on one machine. It's how you prove what actually happened on a wire, not what should have happened."},
+  {t:"quiz",q:"You want to see only DNS traffic in a Wireshark capture. Which filter does that?",choices:["tcp.port==80","dns","icmp","frame contains \"query\""],a:1,why:"Typing the protocol name, `dns`, filters the view to just DNS packets \u2014 the simplest and most common Wireshark filter."},
+  {t:"info",title:"Burp Suite / OWASP ZAP \u2014 testing web apps",body:"These tools sit between your browser and a website as a 'proxy', letting you see and edit every request before it's sent. This is how testers find things like a shopping cart that trusts a price sent from the browser instead of checking it on the server \u2014 you just edit the request and see what the server accepts."},
+  {t:"quiz",q:"What role does Burp Suite play when testing a web app?",choices:["It automatically breaks into the server","An intercepting proxy, so you can see and edit requests before they're sent","A firewall that blocks attacks","A password cracker"],a:1,why:"Burp sits in the middle (a proxy) so you can inspect and modify what your browser is actually sending, which reveals how the server really behaves."},
+  {t:"info",title:"Metasploit \u2014 the exploit framework",body:"Metasploit is a huge library of known, already-public vulnerabilities packaged into ready-to-run 'modules', used to confirm a flaw is really exploitable rather than just theoretical (which is what a vulnerability scanner alone tells you). In the real world, this only ever runs inside an authorized engagement, against systems named in the scope."},
+  {t:"quiz",q:"A vulnerability scanner says a server 'might' be vulnerable to a known flaw. What does running the matching Metasploit module (with authorization) tell you that the scanner alone can't?",choices:["Nothing new, it's the same result","Whether the flaw can actually be exploited in practice, not just theoretically present","The exact password of the admin account","That the server should be deleted"],a:1,why:"Scanners often report based on version numbers alone (false positives are common). Actually running the exploit (with permission) proves whether it truly works."},
+  {t:"info",title:"John the Ripper / Hashcat \u2014 password auditing",body:"Organizations use these tools on their OWN password hashes to find weak passwords before an attacker does \u2014 for example, auditing that 'Password123' is still in use somewhere. They try huge lists of common passwords (dictionaries) and pattern variations, never 'the' password hash of an account you don't control."},
+  {t:"quiz",q:"A company runs Hashcat against its own employee password hashes. What is the legitimate purpose?",choices:["To steal employee passwords for fun","To find weak passwords internally before a real attacker does","It has no legitimate use","To decrypt customer credit cards"],a:1,why:"This is proactive password auditing \u2014 finding your own weak passwords first is standard, authorized security hygiene."},
+  {t:"info",title:"tcpdump & netcat \u2014 the Swiss army knives",body:"tcpdump is Wireshark's command-line cousin, for capturing packets over SSH on a server with no GUI. Netcat (`nc`) reads and writes raw data over a network connection \u2014 testers use it to check if a port is really open and talking (`nc -zv host port`) or to move files between two machines during an authorized test."},
+  {t:"quiz",q:"What does `nc -zv 10.0.0.5 22` do?",choices:["Deletes port 22","Checks (verbosely) whether port 22 on that host is open, without sending data","Opens a reverse shell automatically","Scans every port on the host"],a:1,why:"-z means 'zero-I/O', just check if the port responds, and -v is verbose output. It's the simplest single-port check there is."}
+ ]}
+];
+function cyProg(){S.cyber=S.cyber||{done:{},subnet:{right:0,total:0}};return S.cyber}
+function cyTrackPct(tr){const d=cyProg().done[tr.id]||0;return Math.round(100*d/tr.steps.length)}
+function cyRenderHome(){
+ const p=cyProg(),box=$("cytracks");box.innerHTML="";
+ CYTRACKS.forEach(tr=>{
+  const pct=cyTrackPct(tr),done=p.done[tr.id]||0;
+  const c=document.createElement("button");c.className="cytrack";
+  c.innerHTML='<div class="ct-top"><span>'+tr.emoji+'</span><span style="font-size:13px;color:var(--mute)">'+pct+'%</span></div><div class="ct-title">'+esc(tr.title)+'</div><div class="ct-bar"><i style="width:'+pct+'%"></i></div><div class="ct-n">'+done+' of '+tr.steps.length+' done'+(done>=tr.steps.length?" \u2713":"")+'</div>';
+  c.onclick=()=>cyStart(tr);box.append(c);
+ });
+ const st=p.subnet;$("cystats").textContent=st.total?("So far: "+st.right+" of "+st.total+" correct ("+Math.round(100*st.right/st.total)+"%)."):"No drills yet \u2014 start when ready.";
+}
+let CYTR=null,CYI=0,CYRIGHT=0,CYDRILL=false,CYQ=null;
+function cyOpen(){$("cyberdlg").showModal();cyRenderHome()}
+function cyStart(tr){CYTR=tr;CYI=cyProg().done[tr.id]||0;if(CYI>=tr.steps.length)CYI=0;CYRIGHT=0;CYDRILL=false;$("cyhome").hidden=true;$("cyplay").hidden=false;cyRenderStep()}
+function cyExit(){$("cyplay").hidden=true;$("cyhome").hidden=false;cyRenderHome()}
+function cyBump(n,d){CYI=n;if(d>(cyProg().done[CYTR.id]||0))cyProg().done[CYTR.id]=d;save()}
+function cyAskRow(context){
+ const box=document.createElement("div");box.className="cyaskbox";
+ const b=document.createElement("button");b.className="cyask";b.textContent="\ud83e\udd16 Ask Atlas to explain";
+ const area=document.createElement("div");area.hidden=true;
+ const ta=document.createElement("textarea");ta.rows=2;ta.placeholder="Optional: say exactly what's confusing you";
+ const go=document.createElement("button");go.className="btn ghost";go.style.marginTop="6px";go.textContent="Ask";
+ const out=document.createElement("div");out.className="cytxt";
+ go.onclick=async()=>{
+  go.disabled=true;out.textContent="Thinking\u2026";
+  try{
+   const t=await ask([{role:"system",content:"You are a patient, encouraging cybersecurity tutor helping a college student cram for finals. Keep answers short, concrete, and example-driven. Never just repeat the question back."},
+    {role:"user",content:context+(ta.value.trim()?("\n\nThe student specifically says: "+ta.value.trim()):"\n\nExplain this simply, as if to someone who just got it wrong once.")}],{temperature:0.4,num_ctx:4096});
+   out.textContent=t.trim();
+  }catch(e){out.textContent=fixErr(e.message)}
+  go.disabled=false;
+ };
+ b.onclick=()=>{area.hidden=!area.hidden;if(!area.hidden)ta.focus()};
+ area.append(ta,go,out);box.append(b,area);return box;
+}
+function cyRenderStep(){
+ const steps=CYTR.steps,st=steps[CYI],box=$("cycard");box.innerHTML="";
+ $("cyprogfill").style.width=Math.round(100*CYI/steps.length)+"%";
+ $("cyscore").textContent=CYTR.title+" \u00b7 "+(CYI+1)+" of "+steps.length;
+ if(st.t==="info"){
+  const d=document.createElement("div");d.className="cycard";
+  d.innerHTML="<h3>"+esc(st.title)+"</h3><p>"+esc(st.body)+"</p>";
+  d.append(cyAskRow("Lesson topic: "+st.title+"\n"+st.body));
+  const row=document.createElement("div");row.className="cyrow";
+  const next=document.createElement("button");next.className="btn";next.textContent=CYI+1<steps.length?"Continue":"Finish";
+  next.onclick=()=>{if(CYI+1>=steps.length){cyBump(CYI,steps.length);cyExit()}else{cyBump(CYI+1,CYI+1);cyRenderStep()}};
+  row.append(next);d.append(row);box.append(d);
+ }else{
+  const d=document.createElement("div");d.className="cycard cyq";
+  d.innerHTML='<div class="q">'+esc(st.q)+"</div>";
+  st.choices.forEach((c,i)=>{
+   const b=document.createElement("button");b.className="cyopt";b.textContent=c;
+   b.onclick=()=>{
+    [...d.querySelectorAll(".cyopt")].forEach(x=>x.disabled=true);
+    const ok=i===st.a;b.classList.add(ok?"right":"wrong");
+    if(!ok)d.querySelector(".cyopt:nth-child("+(st.a+2)+")").classList.add("right");
+    const f=document.createElement("div");f.className="cyfeed "+(ok?"right":"wrong");f.textContent=(ok?"Correct. ":"Not quite. ")+st.why;d.append(f);
+    d.append(cyAskRow("Question: "+st.q+"\nCorrect answer: "+st.choices[st.a]+"\nExplanation already given: "+st.why+(ok?"\nThe student got it right but wants more depth.":"\nThe student answered '"+c+"' and got it wrong.")));
+    const row=document.createElement("div");row.className="cyrow";
+    const next=document.createElement("button");next.className="btn";next.textContent=CYI+1<steps.length?"Continue":"Finish";
+    next.onclick=()=>{if(CYI+1>=steps.length){cyBump(CYI,steps.length);cyExit()}else{cyBump(CYI+1,CYI+1);cyRenderStep()}};
+    row.append(next);d.append(row);
+   };
+   d.append(b);
+  });
+  box.append(d);
+ }
+}
+function cyGen(level){
+ const oct=()=>Math.floor(Math.random()*255)+1;
+ const cr=level==="easy"?[24,25,26,27,28]:level==="hard"?[8,12,16,20,22,24,27,29,30]:[16,18,20,22,24,26,27,28,29,30];
+ const cidr=cr[Math.floor(Math.random()*cr.length)];
+ const ip=((oct()<<24)|(oct()<<16)|(oct()<<8)|oct())>>>0;
+ const {net,bc,hosts,mask,first,last}=netCalc(ip,cidr);
+ const kinds=level==="hard"?["net","bc","hosts","mask","reqcidr","host"]:["net","bc","hosts","mask"];
+ const kind=kinds[Math.floor(Math.random()*kinds.length)];
+ let q,answer,type="ip",explain;
+ if(kind==="net"){q="What is the network address of "+intIp(ip)+" /"+cidr+"?";answer=intIp(net);explain="Mask is "+intIp(mask)+". AND the IP with the mask (or use the block-size trick) to get "+intIp(net)+".";}
+ else if(kind==="bc"){q="What is the broadcast address for "+intIp(net)+" /"+cidr+"?";answer=intIp(bc);explain="The broadcast is the last address before the next block starts: "+intIp(bc)+".";}
+ else if(kind==="hosts"){q="How many usable host addresses are in a /"+cidr+" network?";answer=String(hosts);type="num";explain="Host bits = 32-"+cidr+" = "+(32-cidr)+". 2^"+(32-cidr)+" - 2 = "+hosts+".";}
+ else if(kind==="mask"){q="What is the dotted-decimal subnet mask for /"+cidr+"?";answer=intIp(mask);explain="/"+cidr+" means "+cidr+" one-bits, which is "+intIp(mask)+".";}
+ else if(kind==="host"){q="Is "+intIp((net+Math.max(1,Math.min(hosts,3)))>>>0)+" a valid HOST address on the "+intIp(net)+"/"+cidr+" network? Type yes or no.";type="yn";answer=((net+Math.max(1,Math.min(hosts,3)))>>>0)!==net&&((net+Math.max(1,Math.min(hosts,3)))>>>0)!==bc?"yes":"no";explain="Valid hosts are everything strictly between the network address ("+intIp(net)+") and broadcast ("+intIp(bc)+").";}
+ else{const need=[8,20,50,100,500][Math.floor(Math.random()*5)];let need_cidr=32;for(let hb=0;hb<=24;hb++){if(Math.pow(2,hb)-2>=need){need_cidr=32-hb;break}}
+  q="A department needs at least "+need+" usable hosts. What's the smallest subnet, as a CIDR like /24, that fits?";type="cidr";answer="/"+need_cidr;explain="Find the smallest host-bit count hb where 2^hb-2 \u2265 "+need+". That gives /"+need_cidr+".";}
+ return {q,answer,type,explain};
+}
+function cyDrillStart(){CYDRILL=true;$("cyhome").hidden=true;$("cyplay").hidden=false;$("cyback").onclick=()=>{CYDRILL=false;cyExit();$("cyback").onclick=cyExit};cyNextQ()}
+function cyNextQ(){
+ CYQ=cyGen($("cydiff").value);
+ const d=document.createElement("div");d.className="cycard";
+ $("cyprogfill").style.width="100%";const p=cyProg().subnet;$("cyscore").textContent="Subnetting Drill \u00b7 "+p.right+"/"+p.total+" correct";
+ d.innerHTML='<div class="q" style="font-size:19px;font-weight:700;margin-bottom:14px">'+esc(CYQ.q)+"</div>";
+ const inp=document.createElement("input");inp.className="cyinput";inp.placeholder=CYQ.type==="yn"?"yes or no":CYQ.type==="num"?"a number":CYQ.type==="cidr"?"e.g. /26":"e.g. 192.168.1.0";
+ const go=document.createElement("button");go.className="btn";go.textContent="Check";go.style.marginTop="10px";
+ const fb=document.createElement("div");
+ const row=document.createElement("div");row.className="cyrow";
+ const check=()=>{
+  const norm=v=>String(v).trim().toLowerCase().replace(/^\/*/,"/").replace(/^\/$/,"");
+  const got=CYQ.type==="cidr"?norm(inp.value):String(inp.value).trim().toLowerCase();
+  const want=CYQ.type==="cidr"?norm(CYQ.answer):String(CYQ.answer).toLowerCase();
+  const ok=got===want||got===want.replace("/","");
+  inp.disabled=true;go.disabled=true;inp.classList.add(ok?"right":"wrong");
+  const p=cyProg().subnet;p.total++;if(ok)p.right++;save();
+  fb.className="cyfeed "+(ok?"right":"wrong");fb.textContent=(ok?"Correct! ":"Not quite \u2014 the answer is "+CYQ.answer+". ")+CYQ.explain;
+  d.append(cyAskRow("Subnetting practice question: "+CYQ.q+"\nCorrect answer: "+CYQ.answer+"\nShort explanation given: "+CYQ.explain+(ok?"\nThe student got it right.":"\nThe student answered '"+inp.value+"' and got it wrong.")));
+  const next=document.createElement("button");next.className="btn";next.textContent="Next question";next.onclick=cyNextQ;row.append(next);d.append(row);
+ };
+ inp.onkeydown=e=>{if(e.key==="Enter"){e.preventDefault();check()}};
+ go.onclick=check;row.append(go);d.append(inp,document.createElement("br"),fb);
+ const box=$("cycard");box.innerHTML="";box.append(d);setTimeout(()=>inp.focus(),0);
 }
 
 let ICOIMG=null;
@@ -1583,13 +2115,61 @@ function toolMenu(open){
  $("toolmenu").hidden=!open;$("toolsbtn").setAttribute("aria-expanded",open);
  if(open)$("toolmenu").querySelector("button").focus();
 }
-function openSettings(){loadModels();$("setdlg").showModal()}
+function openSettings(){loadModels();ollCheck(false);$("setdlg").showModal()}
 $("toolsbtn").onclick=e=>{e.stopPropagation();toolMenu($("toolmenu").hidden)};
 $("toolmenu").addEventListener("click",e=>{if(e.target.closest("button"))toolMenu(false)});
 document.addEventListener("click",e=>{if(!e.target.closest("#toolmenu,#toolsbtn"))toolMenu(false)});
 document.addEventListener("keydown",e=>{if(e.key==="Escape"&&!$("toolmenu").hidden){toolMenu(false);$("toolsbtn").focus()}});
 $("gearbtn").onclick=openSettings;$("modelchip").onclick=openSettings;
 $("setclose").onclick=()=>$("setdlg").close();
+$("ollcheck").onclick=()=>ollCheck(false);
+$("vtbtn").onclick=visionTest;
+$("codebtn").onclick=()=>{$("codedlg").showModal();if($("codefolder").value&&!CODEF.length)codeOpen()};
+$("cyberbtn").onclick=cyOpen;
+$("cyclose").onclick=()=>{CYDRILL=false;$("cyberdlg").close()};
+$("cyback").onclick=cyExit;
+$("cydrill").onclick=cyDrillStart;
+$("codeclose").onclick=()=>$("codedlg").close();
+$("codeopen").onclick=codeOpen;
+$("codego").onclick=codeAsk;
+$("codeimg").onclick=()=>$("codeimgfile").click();
+$("codeimgfile").onchange=async e=>{try{for(const f of [...e.target.files])CODEIMGS.push(await shrink(f));renderCodeImgs()}catch(x){codesay(x.message)}e.target.value=""};
+$("codeundo").onclick=async()=>{try{const j=await api("/api/code",{action:"undo"});codesay(j.restored?"Put back "+j.restored+" file"+(j.restored===1?"":"s")+" as they were.":"Nothing to undo.");$("codeout").innerHTML="";$("codeapply").hidden=true;if(j.restored)codeOpen("Put back "+j.restored+" file"+(j.restored===1?"":"s")+" as they were.")}catch(e){codesay(e.message)}};
+$("codeapply").onclick=async()=>{
+ const sel=[...$("codeout").querySelectorAll(".cchg input:checked")].map(x=>CODECHG[+x.dataset.i]).map(c=>({path:c.path,content:c.content,expect_new:!c.existing}));
+ if(!sel.length){codesay("Tick at least one change.");return}
+ try{const j=await api("/api/code",{action:"apply",folder:$("codefolder").value,changes:sel});$("codeapply").hidden=true;codeOpen("Wrote "+j.written+" file"+(j.written===1?"":"s")+". Undo last apply puts everything back.")}
+ catch(e){codesay(e.message)}
+};
+$("autobtn").onclick=openAuto;
+$("autoclose").onclick=()=>$("autodlg").close();
+$("autopos").onclick=async()=>{
+ for(let n=3;n>0;n--){$("autoposout").textContent="Put your mouse where you want it. Reading in "+n+"\u2026";await new Promise(r=>setTimeout(r,1000))}
+ try{const j=await api("/api/auto",{action:"pos"});$("autoposout").textContent="Your mouse is at ("+j.x+", "+j.y+"). I added that to your task.";$("autotask").value=($("autotask").value+" (position "+j.x+", "+j.y+")").trim()}
+ catch(e){$("autoposout").textContent=e.message}
+};
+$("automake").onclick=async()=>{
+ const task=$("autotask").value.trim();if(!task){$("autostat").textContent="Describe the task first.";return}
+ try{
+  $("autostat").textContent="Thinking\u2026";$("autoplan").hidden=true;
+  const inf=await api("/api/auto",{action:"info"});let img=null,model=S.model,k=[1,1],w=inf.w,h=inf.h;
+  if($("autoshot").checked){const sh=await api("/api/auto",{action:"shot"});img=sh.b64;model=visionModel();if(!model)throw new Error(NOVISION);k=[inf.w/sh.w,inf.h/sh.h];w=sh.w;h=sh.h}
+  const out=await ask([{role:"system",content:autoSys(w,h,!!img)},{role:"user",content:task,images:img?[img]:undefined}],{temperature:0,num_ctx:8192,num_predict:1500},model);
+  const m=out.match(/\{[\s\S]*\}/);let plan;
+  try{plan=JSON.parse(m[0])}catch(e){throw new Error("The AI didn't give usable steps. Try describing the task more simply, or write the steps yourself under Advanced.")}
+  if(plan.error)throw new Error(plan.error);
+  if(img)(plan.steps||[]).forEach(st=>{["x","x2"].forEach(a=>{if(typeof st[a]==="number")st[a]=Math.round(st[a]*k[0])});["y","y2"].forEach(a=>{if(typeof st[a]==="number")st[a]=Math.round(st[a]*k[1])})});
+  await autoShow(plan);$("autostat").textContent="Check the steps above. Nothing happens until you click Run.";
+ }catch(e){$("autostat").textContent=fixErr(e.message)}
+};
+$("autocheck").onclick=async()=>{try{await autoShow(JSON.parse($("autojson").value));$("autostat").textContent="Steps updated."}catch(e){$("autostat").textContent=e.message}};
+$("autorun").onclick=async()=>{
+ try{await api("/api/auto",{action:"run",plan:AUTOPLAN,delay:+$("autodelay").value});$("autostop").hidden=false;$("autorun").disabled=true;autoPoll()}
+ catch(e){$("autostat").textContent=e.message}
+};
+$("autostop").onclick=()=>api("/api/auto",{action:"stop"}).catch(()=>{});
+$("olldl").onclick=()=>api("/api/ollama",{action:"download"}).catch(e=>{$("ollinfo").textContent=e.message});
+$("ollauto").addEventListener("change",()=>{if($("ollauto").checked)ollCheck(true)});
 $("theme").onchange=e=>{S.theme=e.target.value;applyTheme();save()};
 $("icpick").onclick=()=>$("icfile").click();
 ["icfit","icshape","icbg","ictrans"].forEach(id=>$(id).addEventListener("input",icPreview));
@@ -1626,14 +2206,14 @@ $("vclose").onclick=()=>$("vdlg").close();
 $("vvprev").onclick=()=>vvShow(VI-1);$("vvnext").onclick=()=>vvShow(VI+1);$("vvclose").onclick=vvClose;
 $("vvcb").onchange=()=>{const v=VF[VI];v.sel=$("vvcb").checked;vmark(v)};
 $("vview").addEventListener("keydown",e=>{
- if(e.target.tagName==="INPUT"&&e.target.type==="text"){if(e.key==="Enter"){e.preventDefault();$("vvpmk").click()}else if(e.key==="Escape"){e.preventDefault();$("vvpick").hidden=true;$("vview").focus()}return}
+ if(e.target.tagName==="INPUT"&&e.target.type==="text"){if(e.key==="Enter"){e.preventDefault();(e.target.id==="vvrname"?$("vvrnok"):$("vvpmk")).click()}else if(e.key==="Escape"){e.preventDefault();$("vvpick").hidden=true;$("vvrn").hidden=true;$("vview").focus()}return}
  if(e.key==="ArrowRight"){e.preventDefault();vvShow(VI+1)}
  else if(e.key==="ArrowLeft"){e.preventDefault();vvShow(VI-1)}
  else if(e.key==="s"||e.key==="S"){e.preventDefault();vvToggle()}
  else if(e.key==="Escape"&&!document.fullscreenElement){e.preventDefault();vvClose()}
 });
 document.addEventListener("fullscreenchange",()=>{if(!document.fullscreenElement&&!$("vview").hidden)vvHide()});
-$("vdlg").addEventListener("cancel",e=>{if(!$("vview").hidden){e.preventDefault();vvClose()}else if(FNEW){e.preventDefault();FNEW=false;fRender()}});$("ghclose").onclick=()=>$("ghdlg").close();
+$("vdlg").addEventListener("cancel",e=>{if(!$("vview").hidden){e.preventDefault();vvClose()}else if(FNEW){e.preventDefault();FNEW=false;fRender()}else if(document.querySelector(".vedit")){e.preventDefault()}});$("ghclose").onclick=()=>$("ghdlg").close();
 $("vload").onclick=()=>vLoad();
 $("fnew").onclick=()=>{FNEW=true;fRender()};
 $("fup").onclick=()=>{if(VUP)openFolder(VUP)};
@@ -1643,7 +2223,14 @@ $("fdel").onclick=async()=>{
  await vLoad("Deleted "+ok+" empty folder"+(ok===1?"":"s")+(skip?". Skipped "+skip+" that still have files in them.":"."));
 };
 document.addEventListener("click",e=>{if(!e.target.closest("#fmenu,.fdots"))$("fmenu").hidden=true});
-$("vvadd").onclick=()=>{if($("vvpick").hidden){renderPick();$("vvpname").value="";$("vvpick").hidden=false}else $("vvpick").hidden=true};
+$("vvren").onclick=()=>{
+ if(!$("vvrn").hidden){$("vvrn").hidden=true;return}
+ const v=VF[VI];if(!v)return;const dot=v.name.lastIndexOf(".");
+ $("vvrname").value=v.name.slice(0,dot);$("vvrnext").textContent=v.name.slice(dot);$("vvrnmsg").textContent="";
+ $("vvpick").hidden=true;$("vvrn").hidden=false;$("vvrname").focus();$("vvrname").select();
+};
+$("vvrnok").onclick=vvRename;
+$("vvadd").onclick=()=>{$("vvrn").hidden=true;if($("vvpick").hidden){renderPick();$("vvpname").value="";$("vvpick").hidden=false}else $("vvpick").hidden=true};
 $("vvpmk").onclick=async()=>{
  const n=$("vvpname").value.trim();if(!n){$("vvpmsg").textContent="Type a folder name first.";return}
  try{const f=await api("/api/folder",{action:"create",folder:VCUR,name:n});await vvAddTo(f)}catch(e){$("vvpmsg").textContent=e.message}
@@ -1761,7 +2348,8 @@ $("undo").onclick=async()=>{try{const j=await api("/api/undo");$("plan").textCon
  PRESETS.forEach((p,i)=>{const o=document.createElement("option");o.value=i;o.textContent=p.name;$("preset").append(o)});
  try{const r=await fetch("/api/state");Object.assign(S,await r.json())}catch(e){}
  $("system").value=S.system;$("preset").value=S.preset;$("voicesample").value=S.voiceSample||"";fetch("/api/ping").catch(()=>{});setInterval(()=>fetch("/api/ping").catch(()=>{}),15000);$("mode").value=S.mode;$("game").value=S.game;$("notes").value=S.notes;$("gamebox").hidden=S.mode!=="game";
- ["vfolder","vdest","vmode","vdeep","cfolder","cdeep","cfmt","cdest","ghfolder","ghrepo"].forEach(k=>remember(k,k));
+ ["vfolder","vdest","vmode","vdeep","cfolder","cdeep","cfmt","cdest","ghfolder","ghrepo","ollauto","codefolder"].forEach(k=>remember(k,k));
+ if(S.ollauto)setTimeout(()=>ollCheck(true),4000);
  $("theme").value=S.theme||"";applyTheme();$("icprev").src=document.querySelector('link[rel="icon"][type="image/png"]').href;
  $("vrate").value=S.rate||1;$("vpitch").value=S.pitch||1;vlabels();
  if(window.speechSynthesis){speechSynthesis.onvoiceschanged=fillVoices;fillVoices()}
@@ -1826,6 +2414,32 @@ class Handler(BaseHTTPRequestHandler):
             return {"custom": os.path.exists(os.path.join(ICONDIR, "icon-256.png"))}
         if path == "/api/convert":
             return convert_file(j["path"], j["fmt"], j.get("dest", ""))
+        if path == "/api/auto":
+            return auto_api(j)
+        if path == "/api/code":
+            return code_api(j)
+        if path == "/api/renamefile":
+            return rename_file(j["path"], j.get("new", ""))
+        if path == "/api/ollama":
+            a = j.get("action")
+            if a == "download":  # the official page picks the right installer for your computer
+                webbrowser.open("https://ollama.com/download")
+                return {"ok": True}
+            if a == "status":
+                return {"update": dict(UPD)}
+            if a == "update":
+                if os.name != "nt":
+                    raise ValueError("Atlas can only install Ollama updates by itself on Windows. Use Download latest Ollama instead.")
+                if UPD["state"] in ("downloading", "installing"):
+                    return {"update": dict(UPD)}
+                info = ollama_info()
+                if not info["latest"]:
+                    raise ValueError("Couldn't check the latest Ollama version. Are you online?")
+                if info["newer"]:
+                    UPD.update(state="downloading", pct=0, msg="Starting")
+                    threading.Thread(target=win_update, args=(info["latest"],), daemon=True).start()
+                return {"update": dict(UPD), "newer": info["newer"]}
+            return ollama_info()
         if path == "/api/folder":
             return folder_op(j)
         if path == "/api/send":
@@ -1973,7 +2587,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(200, {"ok": True})
             except Exception:
                 self.reply(400, {"error": "Could not save"})
-        elif self.path in ("/api/extract", "/api/url", "/api/plan", "/api/run", "/api/undo", "/api/warm", "/api/docs", "/api/videos", "/api/send", "/api/folder", "/api/convert", "/api/icon", "/api/share", "/api/shareopen", "/api/ghtoken", "/api/ghcheck", "/api/openurl", "/api/ghplan", "/api/ghgo"):
+        elif self.path in ("/api/extract", "/api/url", "/api/plan", "/api/run", "/api/undo", "/api/warm", "/api/docs", "/api/videos", "/api/send", "/api/auto", "/api/code", "/api/renamefile", "/api/ollama", "/api/folder", "/api/convert", "/api/icon", "/api/share", "/api/shareopen", "/api/ghtoken", "/api/ghcheck", "/api/openurl", "/api/ghplan", "/api/ghgo"):
             try:
                 self.reply(200, self.tool(self.path, raw))
             except Exception as e:
@@ -2001,6 +2615,407 @@ class Handler(BaseHTTPRequestHandler):
                     pass
         else:
             self.reply(404, {"error": "Not found"})
+
+
+# ---------- mouse and keyboard helper ----------
+AUTO = {"state": "idle", "msg": "", "i": 0, "n": 0, "stop": False}
+
+
+def _pg():
+    try:
+        import pyautogui
+    except ImportError:
+        raise ValueError("Mouse and keyboard control needs one extra install. In a terminal run:  pip install pyautogui  then restart Atlas.")
+    except Exception as e:
+        raise ValueError("Couldn't start mouse control on this computer: %s" % e)
+    return pyautogui
+
+
+def auto_clean(plan, size, keys):
+    """Checks a plan from the AI (or from you) and returns (clean plan, plain-English lines)."""
+    W, H = size
+
+    def num(v, k):
+        try:
+            return int(float(v))
+        except (TypeError, ValueError):
+            raise ValueError("Step %d has a number that isn't a number." % k)
+
+    def pt(st, k, need, a="x", b="y"):
+        if a not in st or b not in st:
+            if need:
+                raise ValueError("Step %d needs a position (x and y)." % k)
+            return {}
+        x, y = num(st[a], k), num(st[b], k)
+        if not (0 <= x < W and 0 <= y < H):
+            raise ValueError("Step %d points outside your screen, which is %d by %d." % (k, W, H))
+        return {a: x, b: y}
+
+    try:
+        if not isinstance(plan, dict) or not isinstance(plan.get("steps"), list) or not plan["steps"]:
+            raise ValueError("There are no steps to run.")
+        rep = max(1, min(num(plan.get("repeat") or 1, 0), 100))
+        steps, lines = [], []
+        for k, st in enumerate(plan["steps"][:300], 1):
+            if not isinstance(st, dict):
+                raise ValueError("Step %d isn't valid." % k)
+            op = str(st.get("op", "")).lower().replace("-", "_")
+            s = {"op": op}
+            if op == "move":
+                s.update(pt(st, k, True))
+                d = "Move the mouse to (%d, %d)" % (s["x"], s["y"])
+            elif op in ("click", "double_click", "right_click"):
+                s.update(pt(st, k, False))
+                nm = {"click": "Click", "double_click": "Double-click", "right_click": "Right-click"}[op]
+                d = "%s at (%d, %d)" % (nm, s["x"], s["y"]) if "x" in s else "%s where the mouse is now" % nm
+            elif op == "drag":
+                s.update(pt(st, k, True))
+                s.update(pt(st, k, True, "x2", "y2"))
+                d = "Drag from (%d, %d) to (%d, %d)" % (s["x"], s["y"], s["x2"], s["y2"])
+            elif op == "scroll":
+                s.update(pt(st, k, False))
+                s["amount"] = max(-3000, min(3000, num(st.get("amount", 0), k)))
+                d = "Scroll %s by %d" % ("up" if s["amount"] > 0 else "down", abs(s["amount"]))
+            elif op == "type":
+                s["text"] = str(st.get("text", ""))[:500]
+                if not s["text"]:
+                    raise ValueError("Step %d has nothing to type." % k)
+                d = 'Type "%s"' % s["text"]
+            elif op == "press":
+                s["key"] = str(st.get("key", "")).lower()
+                if s["key"] not in keys:
+                    raise ValueError("Step %d: I don't know the key '%s'." % (k, s["key"]))
+                d = "Press %s" % s["key"].title()
+            elif op == "hotkey":
+                s["keys"] = [str(x).lower() for x in st.get("keys", [])][:4]
+                if len(s["keys"]) < 2 or any(x not in keys for x in s["keys"]):
+                    raise ValueError("Step %d: a shortcut needs two to four keys I know, like ctrl and s." % k)
+                d = "Press %s" % " + ".join(x.title() for x in s["keys"])
+            elif op == "wait":
+                s["seconds"] = max(0.0, min(float(st.get("seconds", 1)), 60.0))
+                d = "Wait %g second%s" % (s["seconds"], "" if s["seconds"] == 1 else "s")
+            else:
+                raise ValueError("Step %d: I don't know the action '%s'." % (k, op))
+            steps.append(s)
+            lines.append(d)
+        if len(steps) * rep > 3000:
+            raise ValueError("That would be more than 3000 actions in total. Use fewer steps or repeats.")
+    except (TypeError, KeyError, AttributeError) as e:
+        raise ValueError("A step is missing something or has a wrong value (%s)." % e)
+    return {"summary": str(plan.get("summary", ""))[:200], "repeat": rep, "steps": steps}, lines
+
+
+def auto_sleep(sec):
+    end = time.time() + sec
+    while time.time() < end:
+        if AUTO["stop"]:
+            return True
+        time.sleep(0.1)
+    return AUTO["stop"]
+
+
+def auto_step(pg, st):
+    op = st["op"]
+    if op in ("move", "click", "double_click", "right_click", "scroll") and "x" in st:
+        pg.moveTo(st["x"], st["y"], duration=0.35)
+    if op == "click":
+        pg.click()
+    elif op == "double_click":
+        pg.doubleClick()
+    elif op == "right_click":
+        pg.rightClick()
+    elif op == "drag":
+        pg.moveTo(st["x"], st["y"], duration=0.35)
+        pg.dragTo(st["x2"], st["y2"], duration=0.7, button="left")
+    elif op == "scroll":
+        pg.scroll(st["amount"])
+    elif op == "type":
+        pg.write(st["text"], interval=0.03)
+    elif op == "press":
+        pg.press(st["key"])
+    elif op == "hotkey":
+        pg.hotkey(*st["keys"])
+    elif op == "wait":
+        auto_sleep(st["seconds"])
+
+
+def auto_run(plan, lines, delay):
+    try:
+        pg = _pg()
+        pg.FAILSAFE, pg.PAUSE = True, 0.08  # pushing the mouse into the top-left corner stops everything
+        for sec in range(delay, 0, -1):
+            AUTO["msg"] = "Starting in %d. Switch to the window you want to control. To stop, click Stop or push the mouse into the top-left corner." % sec
+            if auto_sleep(1):
+                raise StopIteration
+        AUTO["state"] = "running"
+        for _ in range(plan["repeat"]):
+            for st, d in zip(plan["steps"], lines):
+                if AUTO["stop"]:
+                    raise StopIteration
+                AUTO["i"] += 1
+                AUTO["msg"] = "Step %d of %d: %s" % (AUTO["i"], AUTO["n"], d)
+                auto_step(pg, st)
+        AUTO.update(state="done", msg="Finished all %d steps." % AUTO["n"])
+    except StopIteration:
+        AUTO.update(state="stopped", msg="Stopped.")
+    except Exception as e:
+        if e.__class__.__name__ == "FailSafeException":
+            AUTO.update(state="stopped", msg="Stopped: the mouse reached the top-left corner.")
+        else:
+            AUTO.update(state="error", msg="Something went wrong: %s" % e)
+
+
+def auto_shot():
+    import io
+    pg = _pg()
+    im = pg.screenshot().convert("RGB")
+    rw, rh = pg.size()
+    im.thumbnail((1280, 1280))
+    b = io.BytesIO()
+    im.save(b, "JPEG", quality=80)
+    return {"b64": base64.b64encode(b.getvalue()).decode(), "w": im.size[0], "h": im.size[1], "rw": rw, "rh": rh}
+
+
+def auto_api(j):
+    a = j.get("action")
+    if a == "stop":
+        AUTO["stop"] = True
+        return {"ok": True}
+    if a == "status":
+        return dict(AUTO)
+    pg = _pg()
+    w, h = pg.size()
+    if a == "info":
+        return {"w": w, "h": h}
+    if a == "pos":
+        x, y = pg.position()
+        return {"x": x, "y": y}
+    if a == "shot":
+        return auto_shot()
+    plan, lines = auto_clean(j.get("plan"), (w, h), set(pg.KEYBOARD_KEYS))
+    if a == "validate":
+        return {"plan": plan, "lines": lines}
+    if a == "run":
+        if AUTO["state"] in ("countdown", "running"):
+            raise ValueError("Something is already running. Stop it first.")
+        AUTO.update(state="countdown", msg="", i=0, n=len(plan["steps"]) * plan["repeat"], stop=False)
+        threading.Thread(target=auto_run, args=(plan, lines, max(3, min(num_or(j.get("delay"), 8), 30))), daemon=True).start()
+        return dict(AUTO)
+    raise ValueError("Unknown action.")
+
+
+def num_or(v, d):
+    try:
+        return int(float(v))
+    except (TypeError, ValueError):
+        return d
+
+
+# ---------- code helper: real files in a project folder ----------
+CODE_SKIP = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build", ".idea", ".vscode", "target", ".next", ".cache"}
+BINEXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".icns", ".mp4", ".mkv", ".webm", ".mov", ".avi", ".mp3", ".wav", ".zip", ".exe", ".dll",
+          ".so", ".pdf", ".pyc", ".ttf", ".woff", ".woff2", ".bin", ".7z", ".rar", ".gz", ".tar", ".dmg", ".pkg", ".db", ".sqlite"}
+CODE_SECRET = re.compile(r"(^\.env|\.pem$|\.key$|\.pfx$|^id_rsa|^id_ed25519|^credentials)", re.I)
+CODEUNDO = os.path.join(os.path.expanduser("~"), ".my-assistant", "code-undo")
+
+
+def code_path(f, rel):
+    p = (f / rel).resolve()
+    if p == f or f not in p.parents:
+        raise ValueError("'%s' is outside the project folder, so I won't touch it." % rel)
+    if ".git" in p.relative_to(f).parts or CODE_SECRET.search(p.name):
+        raise ValueError("I won't touch '%s' (it is private or part of git)." % rel)
+    return p
+
+
+def code_list(folder):
+    f, out = safe_folder(folder), []
+    for root, dirs, names in os.walk(f):
+        dirs[:] = sorted(d for d in dirs if d not in CODE_SKIP and not d.startswith("."))
+        if len(Path(root).relative_to(f).parts) >= 5:
+            dirs[:] = []
+        for n in sorted(names):
+            p = Path(root) / n
+            if p.suffix.lower() in BINEXT or CODE_SECRET.search(n):
+                continue
+            try:
+                kb = p.stat().st_size // 1024
+            except OSError:
+                continue
+            out.append({"path": p.relative_to(f).as_posix(), "kb": kb})
+            if len(out) >= 400:
+                return {"root": str(f), "files": out, "more": True}
+    return {"root": str(f), "files": out, "more": False}
+
+
+def code_read(folder, paths):
+    f, out = safe_folder(folder), {}
+    for rel in list(paths)[:15]:
+        p = code_path(f, rel)
+        if not p.is_file() or p.suffix.lower() in BINEXT:
+            continue
+        with open(p, "rb") as fh:
+            raw = fh.read(120001)
+        if b"\x00" in raw[:2048]:
+            continue
+        try:
+            text = raw[:120000].decode("utf-8")
+        except UnicodeDecodeError:
+            try:
+                text = raw[:119990].decode("utf-8")  # a multi-byte character may have been cut
+            except UnicodeDecodeError:
+                continue
+        out[rel] = {"text": text, "cut": len(raw) > 120000}
+    return {"files": out}
+
+
+def code_apply(folder, changes):
+    f = safe_folder(folder)
+    if not isinstance(changes, list) or not 1 <= len(changes) <= 20:
+        raise ValueError("Pick between 1 and 20 files to apply.")
+    plan = []
+    for ch in changes:
+        p = code_path(f, str(ch.get("path", "")))
+        text = str(ch.get("content", ""))
+        if len(text) > 400000:
+            raise ValueError("'%s' is too big to write." % ch.get("path"))
+        crlf, existed = False, p.exists()
+        if existed:
+            if not p.is_file():
+                raise ValueError("'%s' is a folder." % ch.get("path"))
+            if ch.get("expect_new"):
+                raise ValueError("'%s' already exists, and the AI never saw it. Tick it and ask again." % ch.get("path"))
+            with open(p, "rb") as fh:
+                crlf = b"\r\n" in fh.read(8192)
+        plan.append((p, text.replace("\r\n", "\n").replace("\n", "\r\n") if crlf else text, existed))
+    shutil.rmtree(CODEUNDO, ignore_errors=True)  # only now: the old undo is replaced by this one
+    os.makedirs(CODEUNDO)
+    manifest = []
+    for i, (p, text, existed) in enumerate(plan):
+        bk = None
+        if existed:
+            bk = os.path.join(CODEUNDO, "%d.bak" % i)
+            shutil.copy2(p, bk)
+        manifest.append({"path": str(p), "backup": bk})
+    with open(os.path.join(CODEUNDO, "manifest.json"), "w") as fh:
+        json.dump(manifest, fh)
+    for p, text, _ in plan:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with open(p, "w", encoding="utf-8", newline="") as fh:
+            fh.write(text)
+    return {"written": len(plan)}
+
+
+def code_undo():
+    try:
+        with open(os.path.join(CODEUNDO, "manifest.json")) as fh:
+            man = json.load(fh)
+    except Exception:
+        return {"restored": 0}
+    n = 0
+    for m in man:
+        p = Path(m["path"])
+        if m["backup"]:
+            shutil.copy2(m["backup"], p)
+            n += 1
+        elif p.exists():
+            p.unlink()
+            n += 1
+    shutil.rmtree(CODEUNDO, ignore_errors=True)
+    return {"restored": n}
+
+
+def code_api(j):
+    a = j.get("action")
+    if a == "list":
+        return code_list(j["folder"])
+    if a == "read":
+        return code_read(j["folder"], j.get("paths", []))
+    if a == "apply":
+        return code_apply(j["folder"], j.get("changes"))
+    if a == "undo":
+        return code_undo()
+    raise ValueError("Unknown action.")
+
+
+# ---------- Ollama updates ----------
+OLLAMA_SETUP_URL = "https://ollama.com/download/OllamaSetup.exe"
+UPD = {"state": "idle", "pct": 0, "msg": ""}
+LATEST = {"t": 0, "v": ""}
+
+
+def vkey(v):
+    return tuple(int(x) for x in re.findall(r"\d+", (v or "").split("-")[0])[:3]) or (0,)
+
+
+def ollama_up():
+    try:
+        with urllib.request.urlopen(OLLAMA + "/api/version", timeout=3) as r:
+            return json.loads(r.read()).get("version", "") or "?"
+    except Exception:
+        return ""
+
+
+def ollama_info():
+    cur = ollama_up()
+    if time.time() - LATEST["t"] > 1800 or not LATEST["v"]:  # ask GitHub at most every 30 minutes
+        try:
+            req = urllib.request.Request("https://api.github.com/repos/ollama/ollama/releases/latest",
+                                         headers={"User-Agent": "atlas", "Accept": "application/vnd.github+json"})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                LATEST.update(t=time.time(), v=json.loads(r.read()).get("tag_name", "").lstrip("v"))
+        except Exception:
+            pass
+    late = LATEST["v"]
+    return {"current": cur if cur != "?" else "", "latest": late, "newer": bool(cur and late and vkey(late) > vkey(cur)),
+            "os": "windows" if os.name == "nt" else ("mac" if sys.platform == "darwin" else "linux"), "update": dict(UPD)}
+
+
+def start_ollama():
+    base = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Ollama")
+    for exe, args in (("ollama app.exe", []), ("ollama.exe", ["serve"])):
+        p = os.path.join(base, exe)
+        if os.path.exists(p):
+            subprocess.Popen([p] + args, creationflags=0x08000008)  # no window, detached
+            return
+
+
+def win_update(latest):
+    path = os.path.join(tempfile.gettempdir(), "OllamaSetup.exe")
+    try:
+        UPD.update(state="downloading", pct=0, msg="Downloading Ollama %s" % latest)
+        req = urllib.request.Request(OLLAMA_SETUP_URL, headers={"User-Agent": "atlas"})
+        with urllib.request.urlopen(req, timeout=60) as r, open(path, "wb") as fh:
+            total, got = int(r.headers.get("Content-Length") or 0), 0
+            while True:
+                b = r.read(1 << 20)
+                if not b:
+                    break
+                fh.write(b)
+                got += len(b)
+                if total:
+                    UPD["pct"] = int(got * 100 / total)
+        with open(path, "rb") as fh:
+            head = fh.read(2)
+        if os.path.getsize(path) < 20000000 or head != b"MZ":
+            raise ValueError("The download didn't look like the Ollama installer. Use Download latest Ollama instead.")
+        UPD.update(state="installing", pct=100, msg="Installing Ollama %s" % latest)
+        subprocess.run([path, "/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART"], timeout=1800)
+        for i in range(30):  # wait for Ollama to answer again, and start it if the installer didn't
+            if ollama_up():
+                break
+            if i == 10:
+                start_ollama()
+            time.sleep(1)
+        ver = ollama_up()
+        UPD.update(state="done", msg=("Ollama is now version %s." % ver) if ver else "Installed, but Ollama isn't answering yet. Start it from the Start menu.")
+    except Exception as e:
+        UPD.update(state="error", msg=str(e) or "The update didn't work. Use Download latest Ollama instead.")
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
 
 
 # ---------- custom app icon ----------
