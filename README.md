@@ -12,6 +12,10 @@ Atlas is a private AI assistant that runs on your own computer using [Ollama](ht
 - **Images and video**: attach a picture or a video clip and ask about it (needs a vision model such as `gemma3:4b`).
 - **Themes and your own icon**: choose dark, light or galaxy (purple), and set any picture as the app icon. It is sized and shaped for you.
 - **Rename files** right in the video and image window, and **keep Ollama up to date** with a switch in Settings (automatic on Windows, one-click download elsewhere).
+- **Customizable tools menu**: create, rename and delete folders for the hamburger-menu tools and drag tools between them (Settings → Customize tools menu) — or just ask Atlas in chat, like "create a folder called Game Dev". Every popup also has an X in the top-left corner now.
+- **Cyber Trainer**: Duolingo-style cybersecurity lessons (basics, networking/subnetting, real tools) with unlimited subnetting drills and an "Ask Atlas" button on every question.
+- **Code helper**: point it at a project folder, tick the files it should read, and it proposes real file changes you review and apply (with undo).
+- **Computer helper**: describe a task and Atlas writes mouse and keyboard steps you approve and run (needs `pip install pyautogui`; push the mouse into the top-left corner to stop).
 - **Game maker**: describe a game, play it in a live preview, and ask for changes.
 - **Tools menu**: organize a folder, preview videos and images, make folders and drag files into them, convert files (needs ffmpeg), share files with your phone through a QR code, and upload a folder to GitHub.
 
