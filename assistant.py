@@ -575,11 +575,17 @@ summary{cursor:pointer;font-weight:600;font-size:13px;color:var(--mute);padding:
 .icon svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 #toolmenu{max-height:calc(100vh - 90px);overflow:auto;position:absolute;top:44px;left:0;right:0;z-index:30;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:6px;box-shadow:0 12px 32px rgba(0,0,0,.55)}
 #toolmenu[hidden]{display:none}
-#toolmenu button{display:block;width:100%;text-align:left;background:none;border:0;border-radius:8px;padding:7px 10px}
-#toolmenu button:hover,#toolmenu button:focus-visible{background:var(--bg)}
+#toolmenu [role="menuitem"]{display:block;width:100%;text-align:left;background:none;border:0;border-radius:8px;padding:7px 10px}
+#toolmenu [role="menuitem"]:hover,#toolmenu [role="menuitem"]:focus-visible{background:var(--bg)}
 #toolmenu b{display:block;font-weight:600;font-size:14px}
 #toolmenu span{display:block;font-size:12px;color:var(--mute)}
-.mgroup{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--mute);padding:8px 10px 2px}
+.mgroup{display:flex;align-items:center;gap:6px;width:100%;background:none;border:0;font:inherit;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--mute);padding:9px 10px 7px;cursor:pointer;border-radius:6px}
+.mgroup:hover,.mgroup:focus-visible{color:var(--ink);background:var(--bg)}
+.mgroup .mgname{flex:1;text-align:left}
+.mgroup .mgchev{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round;transition:transform .15s;transform:rotate(0deg);flex:none}
+.mgroup[aria-expanded="true"] .mgchev{transform:rotate(90deg)}
+.mgbody{max-height:0;overflow:hidden;transition:max-height .2s ease}
+.mgbody.open{max-height:1000px}
 .chip{background:none;border:1px solid var(--line);border-radius:8px;color:var(--mute);font-size:12px;padding:6px 10px;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .chip:hover{color:var(--ink)}
 .set{margin-bottom:14px}
@@ -732,10 +738,28 @@ pre.diff{max-height:300px;overflow:auto;font-size:12px;line-height:1.4;margin:6p
 .cytxt{white-space:pre-wrap;font-size:14px;line-height:1.55;margin-top:6px;color:var(--ink)}
 .cywho{font-size:12px;color:var(--mute);margin-bottom:2px}
 .cyq .q{font-weight:600;font-size:17px;margin-bottom:12px}
+.mnew{display:flex;gap:8px;margin:10px 0 16px}
+.mnew input{flex:1}
+.mfold{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:12px}
+.mfold.drop{border-color:var(--accent);background:var(--me)}
+.mfhead{display:flex;align-items:center;gap:6px;margin-bottom:8px}
+.mfhead .mfname{font-weight:700;flex:1}
+.mfhead input.mfedit{flex:1;padding:4px 8px;border:1px solid var(--accent);border-radius:6px;background:var(--bg);color:var(--ink)}
+.mfhead button{background:none;border:0;color:var(--mute);width:26px;height:26px;border-radius:6px;flex:none}
+.mfhead button:hover{background:var(--panel);color:var(--ink)}
+.mfhead button svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.mchips{display:flex;flex-wrap:wrap;gap:8px;min-height:30px}
+.mchip{display:flex;align-items:center;gap:6px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:13px;cursor:grab}
+.munsorted{border-top:1px dashed var(--line);padding-top:12px;margin-top:4px}
+.munsorted.drop{background:var(--me);border-radius:10px}
+.mgrouplabel{font-size:12px;color:var(--mute);margin-bottom:6px}
 #status.ok{color:var(--mute)}
 .doc{display:flex;gap:6px;align-items:center;font-size:13px;margin-bottom:4px}
 .doc span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-dialog{background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:12px;max-width:560px;width:92%}
+dialog{background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:12px;max-width:560px;width:92%;position:relative;padding-top:46px}
+.xclose{position:absolute;top:12px;left:14px;z-index:6;width:30px;height:30px;border:0;border-radius:8px;background:none;color:var(--mute);display:grid;place-items:center}
+.xclose:hover{background:var(--panel);color:var(--ink)}
+.xclose svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 #plan{max-height:260px;overflow:auto;font-size:13px;margin:12px 0}
 dialog .btn{margin-right:6px;margin-top:8px}
 @media (max-width:760px){
@@ -754,19 +778,14 @@ dialog .btn{margin-right:6px;margin-top:8px}
    <button class="icon" id="gearbtn" aria-label="Settings"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
   </div>
   <div id="toolmenu" role="menu" hidden>
-   <div class="mgroup">Create</div>
    <button role="menuitem" id="makegame"><b>Make a game</b><span>Describe it, play it, edit it live</span></button>
    <button role="menuitem" id="codebtn"><b>Code helper</b><span>Write and edit real code files</span></button>
-   <div class="mgroup">Learn</div>
    <button role="menuitem" id="cyberbtn"><b>Cyber Trainer</b><span>Bite-size cybersecurity lessons + subnetting drills</span></button>
-   <div class="mgroup">Automate</div>
    <button role="menuitem" id="autobtn"><b>Computer helper</b><span>Let Atlas click and type for you</span></button>
-   <div class="mgroup">Files</div>
    <button role="menuitem" id="vids"><b>Videos and images</b><span>Preview, pick and send to a folder</span></button>
    <button role="menuitem" id="convbtn"><b>Convert files</b><span>Change video and image formats</span></button>
    <button role="menuitem" id="tidy"><b>Organize a folder</b><span>Sort Downloads by type, with undo</span></button>
    <button role="menuitem" id="docsbtn"><b>Reference files</b><span>Guides and notes the AI can read</span></button>
-   <div class="mgroup">Share</div>
    <button role="menuitem" id="sharebtn"><b>Share with phone</b><span>Scan a code to move files</span></button>
    <button role="menuitem" id="gh"><b>Upload to GitHub</b><span>Push a folder as one commit</span></button>
   </div>
@@ -897,6 +916,8 @@ dialog .btn{margin-right:6px;margin-top:8px}
  <button class="btn ghost" id="shclose">Close</button>
 </dialog>
 <dialog id="setdlg"><h2>Settings</h2>
+ <div class="set"><label>Tools menu</label><button class="btn ghost" id="mopenbtn" style="margin:0">Customize tools menu</button>
+  <p class="hint">Create folders for the hamburger-menu tools, rename or delete them, and drag tools between folders. You can also just tell Atlas in chat &mdash; try "create a folder called Game Dev" or "move Code helper into Files".</p></div>
  <div class="set"><label for="theme">Theme</label><select id="theme"><option value="">Default (dark)</option><option value="light">Light</option><option value="galaxy">Galaxy (purple)</option></select></div>
  <div class="set"><label for="model">Model</label><select id="model"></select>
   <p class="hint">The AI that answers you. Smaller models are faster.</p></div>
@@ -941,6 +962,14 @@ dialog .btn{margin-right:6px;margin-top:8px}
   <p class="hint">Any picture works. It is cropped or padded to a perfect square and saved at every size your computer needs (16 to 512 pixels). The window picture changes right away, and the taskbar picture the next time you open Atlas.</p></div>
  <div class="smsg" role="status"></div>
  <button class="btn" id="setclose">Done</button>
+</dialog>
+<dialog id="menudlg" style="max-width:640px"><h2>Customize Tools Menu</h2>
+ <p class="hint">Group the hamburger-menu tools however makes sense to you. Drag a tool chip into a folder, rename or delete folders with the buttons on each one, or just ask Atlas in chat to do it for you.</p>
+ <div class="mnew"><input id="mnewname" placeholder="New folder name" maxlength="40" aria-label="New folder name"><button class="btn" id="mnewgo">Create folder</button></div>
+ <div id="mfolders"></div>
+ <div class="munsorted"><div class="mgrouplabel">Not in a folder (shown under "More" in the menu)</div><div id="munsorted" class="mchips"></div></div>
+ <div class="smsg" role="status" id="mmsg"></div>
+ <button class="btn" id="mdone">Done</button>
 </dialog>
 <dialog id="docdlg"><h2>Reference files</h2>
  <p class="hint">Add guides, notes, PDFs or web pages. The AI looks inside the ticked ones when it answers.</p>
@@ -1999,6 +2028,119 @@ function cyNextQ(){
  const box=$("cycard");box.innerHTML="";box.append(d);setTimeout(()=>inp.focus(),0);
 }
 
+// ======================= customizable tools menu =======================
+const TOOLS=[...document.querySelectorAll('#toolmenu [role="menuitem"]')].map(b=>({id:b.id,b:b.querySelector("b").textContent,span:b.querySelector("span").textContent,el:b}));
+const TOOLEL={};TOOLS.forEach(t=>TOOLEL[t.id]=t.el);
+function defaultMenuGroups(){return [
+ {id:"g1",name:"Create",tools:["makegame","codebtn"]},
+ {id:"g2",name:"Learn",tools:["cyberbtn"]},
+ {id:"g3",name:"Automate",tools:["autobtn"]},
+ {id:"g4",name:"Files",tools:["vids","convbtn","tidy","docsbtn"]},
+ {id:"g5",name:"Share",tools:["sharebtn","gh"]}
+]}
+function menuGroups(){if(!S.menuGroups)S.menuGroups=defaultMenuGroups();return S.menuGroups}
+const MGCHEV='<svg class="mgchev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>';
+const OPENSET=new Set();
+function mFold(name,gid,ids,wrap,placed){
+ const open=OPENSET.has(gid);
+ const h=document.createElement("button");h.type="button";h.className="mgroup";h.setAttribute("aria-expanded",open);
+ h.innerHTML='<span class="mgname">'+esc(name)+"</span>"+MGCHEV;
+ const body=document.createElement("div");body.className="mgbody"+(open?" open":"");
+ ids.forEach(id=>{const btn=TOOLEL[id];if(btn){body.append(btn);placed.add(id)}});
+ h.onclick=()=>{const o=!body.classList.contains("open");body.classList.toggle("open",o);h.setAttribute("aria-expanded",o);if(o)OPENSET.add(gid);else OPENSET.delete(gid)};
+ wrap.append(h,body);
+}
+function menuRender(){
+ const groups=menuGroups(),wrap=$("toolmenu"),placed=new Set();
+ wrap.innerHTML="";
+ groups.forEach(g=>{if(g.tools.length)mFold(g.name,g.id,g.tools,wrap,placed)});
+ const left=TOOLS.filter(t=>!placed.has(t.id));
+ if(left.length)mFold("More","__more",left.map(t=>t.id),wrap,placed);
+}
+function mSave(){save();menuRender()}
+let dragTool=null;
+function mChip(t){const c=document.createElement("div");c.className="mchip";c.draggable=true;c.title=t.span;const s=document.createElement("span");s.textContent=t.b;c.append(s);c.ondragstart=()=>{dragTool=t.id};return c}
+function mRenderFolders(){
+ const box=$("mfolders");box.innerHTML="";const placed=new Set();
+ menuGroups().forEach(g=>{
+  g.tools.forEach(id=>placed.add(id));
+  const d=document.createElement("div");d.className="mfold";
+  const head=document.createElement("div");head.className="mfhead";
+  const nm=document.createElement("span");nm.className="mfname";nm.textContent=g.name;
+  const ren=document.createElement("button");ren.innerHTML=ICON.pencil;ren.title="Rename";ren.setAttribute("aria-label","Rename "+g.name);
+  const del=document.createElement("button");del.innerHTML="&times;";del.title="Delete folder";del.setAttribute("aria-label","Delete "+g.name);
+  ren.onclick=()=>{
+   const i=document.createElement("input");i.className="mfedit";i.value=g.name;i.maxLength=40;i.setAttribute("aria-label","Folder name");
+   head.replaceChild(i,nm);i.focus();i.select();
+   const fin=doSave=>{if(doSave){const v=i.value.trim();if(v)g.name=v}mSave();mRenderFolders()};
+   i.onkeydown=e=>{if(e.key==="Enter"){e.preventDefault();fin(true)}else if(e.key==="Escape"){e.preventDefault();fin(false)}};
+   i.onblur=()=>fin(true);
+  };
+  del.onclick=()=>{S.menuGroups=menuGroups().filter(x=>x!==g);mSave();mRenderFolders()};
+  head.append(nm,ren,del);d.append(head);
+  const chips=document.createElement("div");chips.className="mchips";
+  g.tools.forEach(id=>{const t=TOOLS.find(x=>x.id===id);if(t)chips.append(mChip(t))});
+  d.append(chips);
+  d.addEventListener("dragover",e=>{e.preventDefault();d.classList.add("drop")});
+  d.addEventListener("dragleave",e=>{if(!d.contains(e.relatedTarget))d.classList.remove("drop")});
+  d.addEventListener("drop",e=>{e.preventDefault();d.classList.remove("drop");mMoveTool(dragTool,g.id)});
+  box.append(d);
+ });
+ const un=$("munsorted");un.innerHTML="";
+ TOOLS.filter(t=>!placed.has(t.id)).forEach(t=>un.append(mChip(t)));
+ const unwrap=un.parentElement;
+ unwrap.ondragover=e=>{e.preventDefault();unwrap.classList.add("drop")};
+ unwrap.ondragleave=e=>{if(!unwrap.contains(e.relatedTarget))unwrap.classList.remove("drop")};
+ unwrap.ondrop=e=>{e.preventDefault();unwrap.classList.remove("drop");mMoveTool(dragTool,null)};
+}
+function mMoveTool(id,toGid){
+ if(!id)return;
+ menuGroups().forEach(g=>{g.tools=g.tools.filter(x=>x!==id)});
+ if(toGid){const g=menuGroups().find(x=>x.id===toGid);if(g)g.tools.push(id)}
+ mSave();mRenderFolders();
+}
+function openMenuEdit(){mRenderFolders();$("mmsg").textContent="";$("menudlg").showModal()}
+function fuzzyTool(name){
+ name=(name||"").toLowerCase().trim();let best=null,score=0;
+ TOOLS.forEach(t=>{const lb=t.b.toLowerCase();let sc=lb===name?100:(lb.includes(name)||name.includes(lb))?50+Math.min(lb.length,name.length):0;if(sc>score){score=sc;best=t}});
+ return score>=20?best:null;
+}
+function fuzzyFolder(name){
+ name=(name||"").toLowerCase().trim();
+ return menuGroups().find(g=>g.name.toLowerCase()===name)||menuGroups().find(g=>g.name.toLowerCase().includes(name)||name.includes(g.name.toLowerCase()));
+}
+function menuCommand(text){
+ let m;
+ if((m=text.match(/^(?:please |can you |could you |hey atlas,? )*(?:create|make|add)\s+(?:(?:a|an|new)\s+)*folder\s+(?:called|named)?\s*["']?([^"'.!?]{1,40}?)["']?\s*(?:in|inside|for)?\s*(?:the\s+)?(?:tools?\s+)?(?:menu)?\.?$/i))){
+  const name=m[1].trim();if(!name)return null;
+  if(menuGroups().some(g=>g.name.toLowerCase()===name.toLowerCase()))return 'There\u2019s already a folder called "'+name+'" in the tools menu.';
+  menuGroups().push({id:"g"+Date.now(),name,tools:[]});mSave();
+  return 'Done \u2014 I created a folder called "'+name+'" in the tools menu. Open the hamburger menu to see it, or go to Settings \u2192 Customize tools menu to drag tools into it.';
+ }
+ if((m=text.match(/^(?:please |can you |could you )*rename\s+(?:the\s+)?folder\s+["']?([^"'.!?]{1,40})["']?\s+to\s+["']?([^"'.!?]{1,40})["']?\.?$/i))){
+  const g=fuzzyFolder(m[1]);if(!g)return "I couldn't find a tools-menu folder called \""+m[1].trim()+'".';
+  g.name=m[2].trim();mSave();return 'Done \u2014 renamed it to "'+g.name+'".';
+ }
+ if((m=text.match(/^(?:please |can you |could you )*(?:delete|remove)\s+(?:the\s+)?folder\s+["']?([^"'.!?]{1,40})["']?\.?$/i))){
+  const g=fuzzyFolder(m[1]);if(!g)return "I couldn't find a tools-menu folder called \""+m[1].trim()+'".';
+  S.menuGroups=menuGroups().filter(x=>x!==g);mSave();
+  return 'Done \u2014 deleted the "'+g.name+'" folder. Its tools moved back to the unsorted part of the menu.';
+ }
+ if((m=text.match(/^(?:please |can you |could you )*(?:move|put)\s+(?:the\s+)?["']?([^"']{1,40}?)["']?\s+(?:tool\s+|button\s+)?(?:into|in|to)\s+(?:the\s+)?(?:folder\s+["']?([^"'.!?]{1,40})["']?|["']?([^"'.!?]{1,40}?)["']?\s+folder)\.?$/i))){
+  const t=fuzzyTool(m[1]),fname=m[2]||m[3],g=fuzzyFolder(fname);
+  if(!t)return "I'm not sure which tool you mean by \""+m[1].trim()+'".';
+  if(!g)return "I couldn't find a tools-menu folder called \""+(fname||"").trim()+'". Ask me to create it first.';
+  menuGroups().forEach(x=>{x.tools=x.tools.filter(id=>id!==t.id)});g.tools.push(t.id);mSave();
+  return 'Done \u2014 moved "'+t.b+'" into "'+g.name+'".';
+ }
+ if((m=text.match(/^(?:please |can you |could you )*(?:move|put)\s+(?:the\s+)?["']?([^"']{1,40}?)["']?\s+(?:tool\s+|button\s+)?(?:into|in|to)\s+(?:the\s+)?["']?([^"'.!?]{1,40}?)["']?\.?$/i))){
+  const t=fuzzyTool(m[1]),g=fuzzyFolder(m[2]);
+  if(t&&g){menuGroups().forEach(x=>{x.tools=x.tools.filter(id=>id!==t.id)});g.tools.push(t.id);mSave();return 'Done \u2014 moved "'+t.b+'" into "'+g.name+'".';}
+  return null;
+ }
+ return null;
+}
+
 let ICOIMG=null;
 function icsay(t){$("icmsg").textContent=t||""}
 function setFavicon(v){
@@ -2028,6 +2170,16 @@ async function send(text){
  if(busy){ctl&&ctl.abort();return}
  text=(text||"").trim();
  if(!text&&!(PA.imgs.length||PA.notes.length))return;
+ if(text&&!(PA.imgs.length||PA.notes.length)){
+  const mr=menuCommand(text);
+  if(mr){
+   $("input").value="";autosize();
+   const c=cur()||newChat();
+   c.messages.push({role:"user",content:text},{role:"assistant",content:mr});
+   if(c.messages.length===2)c.title=text.slice(0,40);
+   save();render();return;
+  }
+ }
  if(!text)text=PA.notes.length?"What happens in this video?":"What is in this image?";
  if(/^(please |can you |could you )?(upload|push|publish)\b.*\bgithub\b/i.test(text)){$("input").value="";autosize();openGH();return}
  if(/^(please |can you |could you )?convert\b.*\b(videos?|clips?|images?|photos?|pictures?|files?|mp4|png|jpe?g|gif|webp)\b/i.test(text)){$("input").value="";autosize();openConvert();return}
@@ -2117,10 +2269,18 @@ function toolMenu(open){
 }
 function openSettings(){loadModels();ollCheck(false);$("setdlg").showModal()}
 $("toolsbtn").onclick=e=>{e.stopPropagation();toolMenu($("toolmenu").hidden)};
-$("toolmenu").addEventListener("click",e=>{if(e.target.closest("button"))toolMenu(false)});
+$("toolmenu").addEventListener("click",e=>{if(e.target.closest("button")&&!e.target.closest(".mgroup"))toolMenu(false)});
 document.addEventListener("click",e=>{if(!e.target.closest("#toolmenu,#toolsbtn"))toolMenu(false)});
 document.addEventListener("keydown",e=>{if(e.key==="Escape"&&!$("toolmenu").hidden){toolMenu(false);$("toolsbtn").focus()}});
 $("gearbtn").onclick=openSettings;$("modelchip").onclick=openSettings;
+$("mopenbtn").onclick=openMenuEdit;
+$("mdone").onclick=()=>$("menudlg").close();
+$("mnewgo").onclick=()=>{
+ const v=$("mnewname").value.trim();if(!v){$("mmsg").textContent="Type a name first.";return}
+ if(menuGroups().some(g=>g.name.toLowerCase()===v.toLowerCase())){$("mmsg").textContent='A folder called "'+v+'" already exists.';return}
+ menuGroups().push({id:"g"+Date.now(),name:v,tools:[]});$("mnewname").value="";$("mmsg").textContent="";mSave();mRenderFolders();
+};
+$("mnewname").onkeydown=e=>{if(e.key==="Enter"){e.preventDefault();$("mnewgo").click()}};
 $("setclose").onclick=()=>$("setdlg").close();
 $("ollcheck").onclick=()=>ollCheck(false);
 $("vtbtn").onclick=visionTest;
@@ -2346,6 +2506,19 @@ $("undo").onclick=async()=>{try{const j=await api("/api/undo");$("plan").textCon
 
 (async()=>{
  PRESETS.forEach((p,i)=>{const o=document.createElement("option");o.value=i;o.textContent=p.name;$("preset").append(o)});
+ menuRender();
+ document.querySelectorAll("dialog").forEach(d=>{
+  const x=document.createElement("button");x.type="button";x.className="xclose";x.setAttribute("aria-label","Close");
+  x.innerHTML='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>';
+  x.onclick=()=>{
+   if(d.id==="vdlg"){
+    if(!$("vview").hidden){vvClose();return}
+    if(FNEW){FNEW=false;fRender();return}
+   }
+   d.close();
+  };
+  d.prepend(x);
+ });
  try{const r=await fetch("/api/state");Object.assign(S,await r.json())}catch(e){}
  $("system").value=S.system;$("preset").value=S.preset;$("voicesample").value=S.voiceSample||"";fetch("/api/ping").catch(()=>{});setInterval(()=>fetch("/api/ping").catch(()=>{}),15000);$("mode").value=S.mode;$("game").value=S.game;$("notes").value=S.notes;$("gamebox").hidden=S.mode!=="game";
  ["vfolder","vdest","vmode","vdeep","cfolder","cdeep","cfmt","cdest","ghfolder","ghrepo","ollauto","codefolder"].forEach(k=>remember(k,k));
