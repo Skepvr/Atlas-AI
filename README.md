@@ -11,8 +11,10 @@ Atlas is a private AI assistant that runs on your own computer using [Ollama](ht
 - **Reference files**: add notes, PDFs or web pages and ask questions about them.
 - **Images and video**: attach a picture or a video clip and ask about it (needs a vision model such as `gemma3:4b`).
 - **Themes and your own icon**: choose dark, light or galaxy (purple), and set any picture as the app icon. It is sized and shaped for you.
+- **Edit Atlas itself**: in Code helper, click "This app (Atlas itself)" to let the AI propose real changes to Atlas's own code — still reviewed as a diff before anything is written, with an extra backup on top of the usual undo, and a one-click restart to pick up the change. Most local models struggle with a file this large, so ask for one small change at a time.
+- **Downloadable files from chat**: ask Atlas for something you'd want to keep (a script, a list, notes, a config) and a "Download" button appears under its reply, no extra tool needed.
 - **Rename files** right in the video and image window, and **keep Ollama up to date** with a switch in Settings (automatic on Windows, one-click download elsewhere).
-- **Customizable tools menu**: create, rename and delete folders for the hamburger-menu tools and drag tools between them (Settings → Customize tools menu) — or just ask Atlas in chat, like "create a folder called Game Dev". Every popup also has an X in the top-left corner now.
+- **Customizable tools menu**: create, rename and delete folders for the hamburger-menu tools and drag tools between them (Settings → Customize tools menu) — or just ask Atlas in chat, like "create a folder called Game Dev". The groups in that menu are now real collapsible folders (click to pop open/closed) instead of always-expanded lists. Every popup also has an X in the top-left corner now.
 - **Cyber Trainer**: Duolingo-style cybersecurity lessons (basics, networking/subnetting, real tools) with unlimited subnetting drills and an "Ask Atlas" button on every question.
 - **Code helper**: point it at a project folder, tick the files it should read, and it proposes real file changes you review and apply (with undo).
 - **Computer helper**: describe a task and Atlas writes mouse and keyboard steps you approve and run (needs `pip install pyautogui`; push the mouse into the top-left corner to stop).

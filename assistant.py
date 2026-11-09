@@ -753,6 +753,7 @@ pre.diff{max-height:300px;overflow:auto;font-size:12px;line-height:1.4;margin:6p
 .munsorted{border-top:1px dashed var(--line);padding-top:12px;margin-top:4px}
 .munsorted.drop{background:var(--me);border-radius:10px}
 .mgrouplabel{font-size:12px;color:var(--mute);margin-bottom:6px}
+.selfwarn{border:1px solid #5a3b12;background:rgba(255,180,80,.1);border-radius:8px;padding:8px 10px;font-size:13px;margin:8px 0}
 #status.ok{color:var(--mute)}
 .doc{display:flex;gap:6px;align-items:center;font-size:13px;margin-bottom:4px}
 .doc span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -996,7 +997,7 @@ dialog .btn{margin-right:6px;margin-top:8px}
  <div class="cgrid">
   <div>
    <label for="codefolder">Project folder</label><input id="codefolder" placeholder="~/projects/my-app">
-   <button class="btn" id="codeopen">Open project</button>
+   <button class="btn" id="codeopen">Open project</button><button class="btn ghost" id="codeself">This app (Atlas itself)</button>
    <div id="codefiles" role="group" aria-label="Project files"></div>
   </div>
   <div>
@@ -1007,6 +1008,7 @@ dialog .btn{margin-right:6px;margin-top:8px}
    <div id="codemsg" role="status" style="margin:8px 0;font-size:13px"></div>
    <div id="codeout"></div>
    <button class="btn" id="codeapply" hidden>Apply ticked changes</button>
+   <button class="btn" id="selfrestart" hidden style="background:#c0392b;color:#fff;margin-top:8px">Restart Atlas now</button>
   </div>
  </div>
 </dialog>
@@ -1127,6 +1129,10 @@ function renderMsgs(){
   const d=document.createElement("div");d.className="m "+m.role;
   if(m.role==="user"){d.textContent=m.content;thumbs(m,d)}else d.innerHTML=m.content?md(m.content):"<em>Thinking\u2026 (the first reply after a pause loads the model)</em>";
   if(m.role==="assistant"&&m.content&&!busy)d.append(actions(m,d));
+  if(m.role==="assistant"&&m.content){
+   const files=extractFiles(m.content);
+   if(files.length){const row=document.createElement("div");files.forEach(f=>row.append(downloadChip(f.name,f.content)));d.append(row)}
+  }
   L.append(d);
  });
  $("msgs").scrollTop=$("msgs").scrollHeight;
@@ -1151,8 +1157,21 @@ async function api(p,body,name){
  const r=await fetch(p,{method:"POST",headers:name?{...H,"X-Name":encodeURIComponent(name)}:H,body:name?body:JSON.stringify(body||{})});
  const j=await r.json();if(!r.ok)throw new Error(j.error||"Something went wrong");return j;
 }
+const FILESYS="If something you make would be more useful as a real file to keep (a script, a config, a text list, notes, a CSV, markdown, HTML, JSON, and so on), include it using exactly this format: a line reading \"FILE: name.ext\" immediately followed by a fenced code block with the complete contents. You can still explain things in plain text before or after. Only do this when a file genuinely helps, not for short or purely conversational answers.\n\n";
 function sys(){
- return (V?"This is a spoken conversation: answer in one to three short sentences of plain speech, with no lists, markdown or code. ":"")+sys0();
+ return (V?"This is a spoken conversation: answer in one to three short sentences of plain speech, with no lists, markdown or code. ":FILESYS)+sys0();
+}
+function extractFiles(content){
+ const re=/(?:^|\n)[ \t*]*FILE:\s*([^\n]+)\n```[^\n]*\n([\s\S]*?)\n```/g;
+ const out=[];let m;
+ while((m=re.exec(content)))out.push({name:m[1].trim().replace(/^[`\x27"*]+|[`\x27"*]+$/g,""),content:m[2]+"\n"});
+ return out;
+}
+function downloadChip(name,content){
+ const b=document.createElement("button");b.className="btn ghost";b.style.cssText="margin:8px 6px 0 0;font-size:13px;padding:6px 12px";
+ b.textContent="\u2b07 Download "+name;
+ b.onclick=()=>{const u=URL.createObjectURL(new Blob([content],{type:"text/plain"}));const a=document.createElement("a");a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),1000)};
+ return b;
 }
 function sys0(){
  if(S.mode!=="game")return S.system;
@@ -2290,16 +2309,43 @@ $("cyclose").onclick=()=>{CYDRILL=false;$("cyberdlg").close()};
 $("cyback").onclick=cyExit;
 $("cydrill").onclick=cyDrillStart;
 $("codeclose").onclick=()=>$("codedlg").close();
+$("codeself").onclick=async()=>{
+ try{
+  const j=await api("/api/code",{action:"selfinfo"});
+  if(j.frozen){codesay("This installed copy of Atlas can't edit its own code. Run assistant.py with Python instead (see the README) to use this.");return}
+  $("codefolder").value=j.dir;
+  const w=document.createElement("div");w.className="selfwarn";
+  w.textContent="You're about to let the AI edit Atlas's own code ("+j.file+"). It's a large file, and most local models struggle to rewrite it correctly, so ask for one small, specific change at a time. Every change is shown as a diff before anything is written, and there's an extra backup on top of the usual undo.";
+  $("codeout").innerHTML="";$("codeout").append(w);$("selfrestart").hidden=true;
+  codeOpen();
+ }catch(e){codesay(e.message)}
+};
+$("selfrestart").onclick=async()=>{
+ try{
+  $("selfrestart").disabled=true;$("selfrestart").textContent="Restarting\u2026";
+  await api("/api/code",{action:"restart"});
+  let tries=0;
+  const poll=setInterval(async()=>{
+   tries++;
+   try{await fetch("/");clearInterval(poll);location.reload()}
+   catch(e){if(tries>30){clearInterval(poll);$("selfrestart").textContent="Taking longer than expected \u2014 reload this page yourself";$("selfrestart").disabled=false}}
+  },500);
+ }catch(e){codesay(e.message);$("selfrestart").disabled=false;$("selfrestart").textContent="Restart Atlas now"}
+};
 $("codeopen").onclick=codeOpen;
 $("codego").onclick=codeAsk;
 $("codeimg").onclick=()=>$("codeimgfile").click();
 $("codeimgfile").onchange=async e=>{try{for(const f of [...e.target.files])CODEIMGS.push(await shrink(f));renderCodeImgs()}catch(x){codesay(x.message)}e.target.value=""};
-$("codeundo").onclick=async()=>{try{const j=await api("/api/code",{action:"undo"});codesay(j.restored?"Put back "+j.restored+" file"+(j.restored===1?"":"s")+" as they were.":"Nothing to undo.");$("codeout").innerHTML="";$("codeapply").hidden=true;if(j.restored)codeOpen("Put back "+j.restored+" file"+(j.restored===1?"":"s")+" as they were.")}catch(e){codesay(e.message)}};
+$("codeundo").onclick=async()=>{try{const j=await api("/api/code",{action:"undo"});codesay(j.restored?"Put back "+j.restored+" file"+(j.restored===1?"":"s")+" as they were.":"Nothing to undo.");$("codeout").innerHTML="";$("codeapply").hidden=true;$("selfrestart").hidden=true;if(j.restored)codeOpen("Put back "+j.restored+" file"+(j.restored===1?"":"s")+" as they were.")}catch(e){codesay(e.message)}};
 $("codeapply").onclick=async()=>{
  const sel=[...$("codeout").querySelectorAll(".cchg input:checked")].map(x=>CODECHG[+x.dataset.i]).map(c=>({path:c.path,content:c.content,expect_new:!c.existing}));
  if(!sel.length){codesay("Tick at least one change.");return}
- try{const j=await api("/api/code",{action:"apply",folder:$("codefolder").value,changes:sel});$("codeapply").hidden=true;codeOpen("Wrote "+j.written+" file"+(j.written===1?"":"s")+". Undo last apply puts everything back.")}
- catch(e){codesay(e.message)}
+ try{
+  const j=await api("/api/code",{action:"apply",folder:$("codefolder").value,changes:sel});
+  $("codeapply").hidden=true;$("selfrestart").hidden=!j.self_edited;
+  if(j.self_edited)codesay("Wrote "+j.written+" file"+(j.written===1?"":"s")+". This changes Atlas's own running code, so it needs to restart before the change takes effect.");
+  else codeOpen("Wrote "+j.written+" file"+(j.written===1?"":"s")+". Undo last apply puts everything back.");
+ }catch(e){codesay(e.message)}
 };
 $("autobtn").onclick=openAuto;
 $("autoclose").onclick=()=>$("autodlg").close();
@@ -2988,6 +3034,31 @@ def num_or(v, d):
 CODE_SKIP = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build", ".idea", ".vscode", "target", ".next", ".cache"}
 BINEXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".icns", ".mp4", ".mkv", ".webm", ".mov", ".avi", ".mp3", ".wav", ".zip", ".exe", ".dll",
           ".so", ".pdf", ".pyc", ".ttf", ".woff", ".woff2", ".bin", ".7z", ".rar", ".gz", ".tar", ".dmg", ".pkg", ".db", ".sqlite"}
+SELF_PATH = os.path.abspath(__file__)
+CODE_HIDE_NAMES = {"assistant_data.json", "assistant_docs.json", "assistant_undo.json", "github_token", ".DS_Store", "Thumbs.db"}
+SELFBK = os.path.join(os.path.expanduser("~"), ".my-assistant", "self-edit-backups")
+RESTART = {"flag": False}
+SRV = {"server": None}
+
+
+def self_backup():
+    os.makedirs(SELFBK, exist_ok=True)
+    shutil.copy2(SELF_PATH, os.path.join(SELFBK, "assistant-%d.py" % int(time.time())))
+    keep = sorted(Path(SELFBK).glob("assistant-*.py"), key=lambda p: p.stat().st_mtime)
+    for old in keep[:-5]:
+        try:
+            old.unlink()
+        except OSError:
+            pass
+
+
+def self_restart():
+    if not SRV["server"]:
+        raise ValueError("The server isn't fully started yet. Try again in a moment.")
+    RESTART["flag"] = True
+    threading.Thread(target=lambda: (time.sleep(0.3), SRV["server"].shutdown()), daemon=True).start()
+
+
 CODE_SECRET = re.compile(r"(^\.env|\.pem$|\.key$|\.pfx$|^id_rsa|^id_ed25519|^credentials)", re.I)
 CODEUNDO = os.path.join(os.path.expanduser("~"), ".my-assistant", "code-undo")
 
@@ -2996,8 +3067,8 @@ def code_path(f, rel):
     p = (f / rel).resolve()
     if p == f or f not in p.parents:
         raise ValueError("'%s' is outside the project folder, so I won't touch it." % rel)
-    if ".git" in p.relative_to(f).parts or CODE_SECRET.search(p.name):
-        raise ValueError("I won't touch '%s' (it is private or part of git)." % rel)
+    if ".git" in p.relative_to(f).parts or CODE_SECRET.search(p.name) or p.name in CODE_HIDE_NAMES:
+        raise ValueError("I won't touch '%s' (it is private, part of git, or one of Atlas's own data files)." % rel)
     return p
 
 
@@ -3009,7 +3080,7 @@ def code_list(folder):
             dirs[:] = []
         for n in sorted(names):
             p = Path(root) / n
-            if p.suffix.lower() in BINEXT or CODE_SECRET.search(n):
+            if p.suffix.lower() in BINEXT or CODE_SECRET.search(n) or n in CODE_HIDE_NAMES:
                 continue
             try:
                 kb = p.stat().st_size // 1024
@@ -3061,6 +3132,9 @@ def code_apply(folder, changes):
             with open(p, "rb") as fh:
                 crlf = b"\r\n" in fh.read(8192)
         plan.append((p, text.replace("\r\n", "\n").replace("\n", "\r\n") if crlf else text, existed))
+    self_edit = any(str(p) == SELF_PATH for p, _, _ in plan)
+    if self_edit:
+        self_backup()  # a second, longer-lived safety net beyond the undo below
     shutil.rmtree(CODEUNDO, ignore_errors=True)  # only now: the old undo is replaced by this one
     os.makedirs(CODEUNDO)
     manifest = []
@@ -3076,7 +3150,7 @@ def code_apply(folder, changes):
         p.parent.mkdir(parents=True, exist_ok=True)
         with open(p, "w", encoding="utf-8", newline="") as fh:
             fh.write(text)
-    return {"written": len(plan)}
+    return {"written": len(plan), "self_edited": self_edit}
 
 
 def code_undo():
@@ -3108,6 +3182,11 @@ def code_api(j):
         return code_apply(j["folder"], j.get("changes"))
     if a == "undo":
         return code_undo()
+    if a == "selfinfo":
+        return {"dir": os.path.dirname(SELF_PATH), "file": os.path.basename(SELF_PATH), "frozen": bool(getattr(sys, "frozen", False))}
+    if a == "restart":
+        self_restart()
+        return {"ok": True}
     raise ValueError("Unknown action.")
 
 
@@ -3692,6 +3771,7 @@ if __name__ == "__main__":
     url = f"http://localhost:{PORT}"
     try:
         server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+        SRV["server"] = server
     except OSError:  # already running, so just open it
         open_window(url)
         sys.exit()
@@ -3702,3 +3782,10 @@ if __name__ == "__main__":
         server.serve_forever()
     except KeyboardInterrupt:
         say("\nStopped.")
+    if RESTART["flag"]:
+        say("Restarting Atlas...")
+        try:
+            share_stop()
+        except Exception:
+            pass
+        os.execv(sys.executable, [sys.executable] + sys.argv)
